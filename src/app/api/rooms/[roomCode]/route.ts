@@ -1,0 +1,61 @@
+import { addSharedPlayer, assignSharedTeams, beginTeamAssignment, getSharedRoomView, isSharedPlayerAuthenticated, respondToTeamAssignment } from "@/lib/shared-rooms";
+import { normalizePlayerName, type LocalPlayer } from "@/lib/session";
+import { readRoomSessionToken, withRoomSessionCookie } from "@/lib/room-auth";
+
+export const runtime = "nodejs";
+type RouteContext = { params: Promise<{ roomCode: string }> };
+
+export async function GET(request: Request, { params }: RouteContext) {
+  const { roomCode } = await params;
+  const playerId = new URL(request.url).searchParams.get("playerId") ?? "";
+  const token = readRoomSessionToken(request, roomCode);
+  const room = await getSharedRoomView(roomCode, playerId, token);
+  if (!room) return Response.json({ error: "Room not found. Check the link or room code." }, { status: 404 });
+  return Response.json({ room }, { headers: { "Cache-Control": "no-store" } });
+}
+
+export async function POST(request: Request, { params }: RouteContext) {
+  const { roomCode } = await params;
+  let body: { playerId?: unknown; nickname?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: "Your join details were not valid." }, { status: 400 });
+  }
+
+  if (typeof body.playerId !== "string" || typeof body.nickname !== "string") {
+    return Response.json({ error: "Enter a name to join this room." }, { status: 400 });
+  }
+  if (!body.nickname.trim()) return Response.json({ error: "Enter a name to join this room." }, { status: 400 });
+  const nickname = normalizePlayerName(body.nickname);
+
+  const player: LocalPlayer = {
+    id: body.playerId.slice(0, 80),
+    nickname,
+    isAdmin: false,
+    isReady: true,
+    joinedAt: Date.now(),
+  };
+  const token = readRoomSessionToken(request, roomCode);
+  const result = await addSharedPlayer(roomCode, player, token);
+  if (!result.room) return Response.json({ error: result.error }, { status: 404 });
+  const response = Response.json({ room: await getSharedRoomView(roomCode, player.id, result.token ?? token) });
+  return result.token ? withRoomSessionCookie(response, roomCode, result.token) : response;
+}
+
+export async function PATCH(request: Request, { params }: RouteContext) {
+  const { roomCode } = await params;
+  let body: { action?: unknown; playerId?: unknown; assignments?: unknown; accept?: unknown; shuffle?: unknown };
+  try { body = await request.json(); } catch { return Response.json({ error: "That room action was not valid." }, { status: 400 }); }
+  if (typeof body.playerId !== "string") return Response.json({ error: "Your player session is missing." }, { status: 400 });
+  if (!await isSharedPlayerAuthenticated(roomCode, body.playerId, readRoomSessionToken(request, roomCode))) return Response.json({ error: "Reconnect to this room before changing teams." }, { status: 401 });
+  let result;
+  if (body.action === "begin-assignment") result = await beginTeamAssignment(roomCode, body.playerId);
+  else if (body.action === "assign-teams" && (body.shuffle === true || (body.assignments && typeof body.assignments === "object"))) {
+    result = await assignSharedTeams(roomCode, body.playerId, (body.assignments ?? {}) as Record<string, "Alpha" | "Bravo">, body.shuffle === true);
+  } else if (body.action === "respond" && typeof body.accept === "boolean") {
+    result = await respondToTeamAssignment(roomCode, body.playerId, body.accept);
+  } else return Response.json({ error: "That room action is not available." }, { status: 400 });
+  if (!result.room) return Response.json({ error: result.error }, { status: 403 });
+  return Response.json({ room: await getSharedRoomView(roomCode, body.playerId, readRoomSessionToken(request, roomCode)) });
+}
