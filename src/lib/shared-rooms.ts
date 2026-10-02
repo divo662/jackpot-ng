@@ -1,4 +1,5 @@
 import { normalizePlayerName, type LocalChatMessage, type LocalPlayer, type LocalRoomStatus } from "@/lib/session";
+import { ALL_SIGNAL_IDS } from "@/lib/signals";
 import { applyRoundScore, createRoomMatch, emptyScores, passCard, resolveJackpot, resolveSuspect, SIGNAL_DECISION_WINDOW_MS, SUSPECT_ATTEMPTS_PER_TEAM, type GameSnapshot, type RoundResult, type ScoreBoard } from "@/lib/game";
 import type { JackpotCard, Suit } from "@/lib/deck";
 import { neon } from "@neondatabase/serverless";
@@ -63,7 +64,10 @@ async function ensureRoomTable(): Promise<void> {
 
 async function readRoom(code: string): Promise<SharedRoom | null> {
   await ensureRoomTable();
-  const rows = await sql!`SELECT room_state FROM jackpot_rooms WHERE code = ${code}`;
+  const clean = code.trim().toUpperCase();
+  const withHyphen = clean.startsWith("JKP") && !clean.includes("-") ? `JKP-${clean.slice(3)}` : clean;
+  const withoutHyphen = clean.replace(/-/g, "");
+  const rows = await sql!`SELECT room_state FROM jackpot_rooms WHERE code = ${clean} OR code = ${withHyphen} OR REPLACE(code, '-', '') = ${withoutHyphen} LIMIT 1`;
   return (rows[0]?.room_state as SharedRoom | undefined) ?? null;
 }
 
@@ -119,6 +123,42 @@ export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
   }
   if (room?.teamPhase === "strategy" && room.strategyEndsAt && Date.now() >= room.strategyEndsAt) {
     return await finishStrategy(room);
+  }
+  if (room?.status === "lobby") {
+    const now = Date.now();
+    const activePlayers = room.players.filter((player) => {
+      const lastActive = player.lastSeen ?? player.joinedAt;
+      return now - lastActive < 25_000;
+    });
+    if (activePlayers.length < room.players.length) {
+      const removed = room.players.filter((p) => !activePlayers.some((a) => a.id === p.id));
+      if (activePlayers.length === 0) {
+        await deleteSharedRoom(room.code);
+        return null;
+      }
+      const previous = room;
+      const nextHost = activePlayers.some((p) => p.id === room!.hostPlayerId)
+        ? room.hostPlayerId
+        : activePlayers[0].id;
+      room = {
+        ...room,
+        hostPlayerId: nextHost,
+        players: activePlayers.map((p) => ({ ...p, isAdmin: p.id === nextHost })),
+        chat: [
+          ...room.chat,
+          ...removed.map((p) => ({
+            id: `message-${crypto.randomUUID()}`,
+            playerId: p.id,
+            nickname: p.nickname,
+            text: `${p.nickname} left the room (disconnected).`,
+            createdAt: now,
+            system: true,
+          })),
+        ].slice(-100),
+        updatedAt: nextUpdatedAt(room),
+      };
+      if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code);
+    }
   }
   return room;
 }
@@ -218,7 +258,7 @@ export async function addSharedPlayer(
     if (existing.nickname === player.nickname) return { room: await getSharedRoom(code) ?? room, token: playerToken };
     const renamed = {
       ...room,
-      players: room.players.map((entry) => entry.id === player.id ? { ...entry, nickname: player.nickname } : entry),
+      players: room.players.map((entry) => entry.id === player.id ? { ...entry, nickname: player.nickname, lastSeen: Date.now() } : entry),
       updatedAt: nextUpdatedAt(room),
     };
     if (!await saveRoom(renamed, room.updatedAt)) return { error: "Room changed just now. Please try again." };
@@ -229,7 +269,7 @@ export async function addSharedPlayer(
 
   const next: SharedRoom = {
     ...room,
-    players: [...room.players, { ...player, isAdmin: false }],
+    players: [...room.players, { ...player, isAdmin: false, lastSeen: Date.now() }],
     playerTokens: { ...room.playerTokens, [player.id]: createPlayerToken() },
     tokenClaims: { ...room.tokenClaims, [player.id]: true },
     chat: [...room.chat, {
@@ -244,6 +284,101 @@ export async function addSharedPlayer(
   };
   if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
   return { room: next, token: next.playerTokens?.[player.id] };
+}
+
+export async function deleteSharedRoom(code: string): Promise<boolean> {
+  await ensureRoomTable();
+  const clean = code.trim().toUpperCase();
+  const withHyphen = clean.startsWith("JKP") && !clean.includes("-") ? `JKP-${clean.slice(3)}` : clean;
+  const withoutHyphen = clean.replace(/-/g, "");
+  await sql!`DELETE FROM jackpot_rooms WHERE code = ${clean} OR code = ${withHyphen} OR REPLACE(code, '-', '') = ${withoutHyphen}`;
+  return true;
+}
+
+export async function touchSharedPlayerPresence(code: string, playerId: string): Promise<void> {
+  if (!code || !playerId) return;
+  const room = await readRoom(code.trim().toUpperCase());
+  if (!room) return;
+  const player = room.players.find((p) => p.id === playerId);
+  if (!player) return;
+  const now = Date.now();
+  if (player.lastSeen && now - player.lastSeen < 6000) return;
+  const updated: SharedRoom = {
+    ...room,
+    players: room.players.map((p) => p.id === playerId ? { ...p, lastSeen: now } : p),
+    updatedAt: nextUpdatedAt(room),
+  };
+  await saveRoom(updated, room.updatedAt);
+}
+
+export async function removeSharedPlayer(code: string, playerId: string): Promise<{ success: boolean; error?: string }> {
+  const cleanCode = code.trim().toUpperCase();
+  const room = await getSharedRoom(cleanCode);
+  if (!room) return { success: false, error: "Room not found." };
+  const player = room.players.find((p) => p.id === playerId);
+  if (!player) return { success: true };
+
+  const remaining = room.players.filter((p) => p.id !== playerId);
+  if (remaining.length === 0) {
+    await deleteSharedRoom(cleanCode);
+    return { success: true };
+  }
+
+  const nextHost = room.hostPlayerId === playerId
+    ? [...remaining].sort((a, b) => a.joinedAt - b.joinedAt)[0].id
+    : remaining.some((p) => p.id === room.hostPlayerId) ? room.hostPlayerId : remaining[0].id;
+
+  const now = Date.now();
+  const nextTeams = room.teams ? { ...room.teams } : undefined;
+  if (nextTeams) delete nextTeams[playerId];
+
+  const nextAcceptances = room.teamAcceptances ? { ...room.teamAcceptances } : undefined;
+  if (nextAcceptances) delete nextAcceptances[playerId];
+
+  const updated: SharedRoom = {
+    ...room,
+    hostPlayerId: nextHost,
+    players: remaining.map((p) => ({ ...p, isAdmin: p.id === nextHost })),
+    teams: nextTeams,
+    teamAcceptances: nextAcceptances,
+    teamPhase: (room.teamPhase === "assignment" || room.teamPhase === "confirmation") && remaining.length < 4
+      ? "lobby"
+      : room.teamPhase,
+    chat: [
+      ...room.chat,
+      {
+        id: `message-${crypto.randomUUID()}`,
+        playerId,
+        nickname: player.nickname,
+        text: `${player.nickname} left the room.`,
+        createdAt: now,
+        system: true,
+      },
+    ].slice(-100),
+    updatedAt: nextUpdatedAt(room),
+  };
+
+  const saved = await saveRoom(updated, room.updatedAt);
+  return { success: saved };
+}
+
+/** Update the guest's display name in the current shared room. */
+export async function renameSharedPlayer(code: string, playerId: string, nickname: string): Promise<{ room?: SharedRoom; error?: string }> {
+  const room = await getSharedRoom(code);
+  if (!room) return { error: "This room is no longer available." };
+  const cleanName = normalizePlayerName(nickname);
+  if (!room.players.some((player) => player.id === playerId)) return { error: "Your player seat is not in this room." };
+  const next: SharedRoom = {
+    ...room,
+    players: room.players.map((player) => player.id === playerId ? { ...player, nickname: cleanName } : player),
+    gameSnapshot: room.gameSnapshot ? {
+      ...room.gameSnapshot,
+      players: room.gameSnapshot.players.map((player) => player.id === playerId ? { ...player, name: cleanName } : player),
+    } : room.gameSnapshot,
+    updatedAt: nextUpdatedAt(room),
+  };
+  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
+  return { room: next };
 }
 
 export async function addSharedMessage(
@@ -375,7 +510,7 @@ export async function updatePrivateTeamRoom(code: string, playerId: string, inpu
   if (!team || !sender) return { error: "Join this room before sending team updates." };
   const next: SharedRoom = { ...room, teamSignals: { ...room.teamSignals }, teamChats: { ...room.teamChats }, updatedAt: nextUpdatedAt(room) };
   if (input.signal !== undefined) {
-    const allowed = ["wave", "clap", "jump", "crouch", "spin", "point", "salute", "nod", "flash", "dance"];
+    const allowed = ALL_SIGNAL_IDS;
     if (typeof input.signal !== "string" || !allowed.includes(input.signal)) return { error: "Choose a signal from the signal library." };
     if (room.teamSignalLocked?.[team]) return { error: "Your team has already agreed and locked its signal." };
     if (room.teamSignals?.[team] !== input.signal) {
@@ -481,7 +616,7 @@ export async function performSharedGameAction(code: string, action: SharedGameAc
       }
     } else if (action.type === "reaction") {
       const actor = game.players.find((player) => player.id === action.playerId);
-      const reactionIds = ["laugh", "wow", "clap", "fire"];
+      const reactionIds = ["laugh", "cry", "eyes", "fire", "shock", "clap", "wow", "saw-that"];
       if (!actor) return { error: "Your player session is not in this game." };
       if (!reactionIds.includes(action.reactionId)) return { error: "Choose a reaction from the reaction bar." };
       const lastReactionAt = room.playerReactionAt?.[actor.id] ?? 0;
@@ -494,8 +629,8 @@ export async function performSharedGameAction(code: string, action: SharedGameAc
       const actor = game.players.find((player) => player.id === action.playerId);
       if (!actor) return { error: "Your player session is not in this game." };
       if (actor.team !== "Alpha" && actor.team !== "Bravo") return { error: "Signals are not configured for this team." };
-      const teamSignal = room.teamSignals?.[actor.team] ?? "wave";
-      const signalIds = ["wave", "clap", "jump", "crouch", "spin", "point", "salute", "nod", "flash", "dance"];
+      const teamSignal = room.teamSignals?.[actor.team] ?? "tap-table";
+      const signalIds = ALL_SIGNAL_IDS;
       const decoys = signalIds.filter((signal) => signal !== teamSignal);
       const signalId = action.type === "fake-signal" ? decoys[randomInt(decoys.length)] : teamSignal;
       const createdAt = Date.now();
@@ -532,6 +667,58 @@ export async function performSharedGameAction(code: string, action: SharedGameAc
     notice: notice || (result ? `${result.title}: ${result.detail}` : ""),
     suspectAttemptsRemaining,
   };
+}
+
+export async function startNextSharedRound(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
+  const room = await getSharedRoom(code);
+  if (!room) return { error: "This room is no longer available." };
+  if (room.hostPlayerId !== requesterId) return { error: "Only the room host can start the next round." };
+  const now = nextUpdatedAt(room);
+  const next: SharedRoom = {
+    ...room,
+    status: "table",
+    teamPhase: "game",
+    gameSnapshot: createRoomMatch(room.players.map((player) => ({
+      id: player.id,
+      name: player.nickname,
+      team: room.teams?.[player.id] ?? "Alpha",
+    }))),
+    dealVersion: (room.dealVersion ?? 5) + 1,
+    scores: room.scores ?? emptyScores(),
+    suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
+    round: (room.round ?? 1) + 1,
+    result: null,
+    pendingSignalTruth: undefined,
+    updatedAt: now,
+  };
+  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
+  return { room: next };
+}
+
+export async function rematchSharedMatch(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
+  const room = await getSharedRoom(code);
+  if (!room) return { error: "This room is no longer available." };
+  if (room.hostPlayerId !== requesterId) return { error: "Only the room host can start a rematch." };
+  const now = nextUpdatedAt(room);
+  const next: SharedRoom = {
+    ...room,
+    status: "table",
+    teamPhase: "game",
+    gameSnapshot: createRoomMatch(room.players.map((player) => ({
+      id: player.id,
+      name: player.nickname,
+      team: room.teams?.[player.id] ?? "Alpha",
+    }))),
+    dealVersion: (room.dealVersion ?? 5) + 1,
+    scores: emptyScores(),
+    suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
+    round: 1,
+    result: null,
+    pendingSignalTruth: undefined,
+    updatedAt: now,
+  };
+  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
+  return { room: next };
 }
 
 export async function restartSharedMatch(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {

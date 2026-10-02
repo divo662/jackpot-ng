@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     !room ||
     typeof room.id !== "string" ||
     typeof room.code !== "string" ||
-    !/^[A-Z0-9]{5}$/.test(room.code) ||
+    !/^[A-Z0-9-]{3,10}$/.test(room.code) ||
     !host ||
     host.id !== room.hostPlayerId ||
     ![4, 6, 8].includes(room.maxPlayers ?? 0)

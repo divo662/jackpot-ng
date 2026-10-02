@@ -16,6 +16,7 @@ export type LocalPlayer = {
   isAdmin: boolean;
   isReady: boolean;
   joinedAt: number;
+  lastSeen?: number;
 };
 
 export type LocalChatMessage = {
@@ -70,10 +71,11 @@ export function createPlayerId(): string {
 }
 
 export function createRoomCode(existingCodes: string[] = []): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
   let code = "";
   do {
-    code = Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+    const part = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    code = `JKP-${part}`;
   } while (existingCodes.includes(code));
   return code;
 }
@@ -96,7 +98,9 @@ export function readRooms(): LocalRoom[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(ROOMS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as LocalRoom[]) : [];
+    const parsed = raw ? (JSON.parse(raw) as LocalRoom[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((room): room is LocalRoom => Boolean(room && typeof room === "object" && typeof room.code === "string" && typeof room.id === "string"));
   } catch {
     return [];
   }
@@ -107,23 +111,26 @@ export function writeRooms(rooms: LocalRoom[]): void {
 }
 
 export function saveRoom(room: LocalRoom): LocalRoom {
-  const rooms = readRooms().filter((entry) => entry.id !== room.id);
+  const rooms = readRooms().filter((entry) => entry && entry.id !== room.id);
   const next = { ...room, updatedAt: Date.now() };
   writeRooms([...rooms, next]);
   return next;
 }
 
-export function findRoom(code: string): LocalRoom | null {
-  const normalized = code.trim().toUpperCase();
-  return readRooms().find((room) => room.code === normalized) ?? null;
+export function findRoom(code?: string | null): LocalRoom | null {
+  if (!code || typeof code !== "string") return null;
+  const clean = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!clean) return null;
+  return readRooms().find((room) => typeof room?.code === "string" && room.code.replace(/[^A-Z0-9]/g, "") === clean) ?? null;
 }
 
 export function createRoomSession(
   nickname: string,
-  isPrivate: boolean,
+  isPrivate: boolean = true,
+  maxPlayers: 4 | 6 | 8 = 4,
 ): { session: LocalSession; room: LocalRoom } {
   const playerId = createPlayerId();
-  const existingCodes = readRooms().map((room) => room.code);
+  const existingCodes = readRooms().map((room) => room?.code).filter((c): c is string => typeof c === "string");
   const code = createRoomCode(existingCodes);
   const now = Date.now();
   const player: LocalPlayer = {
@@ -137,7 +144,7 @@ export function createRoomSession(
     id: makeId("room"),
     code,
     isPrivate,
-    maxPlayers: 8,
+    maxPlayers,
     status: "lobby",
     hostPlayerId: playerId,
     players: [player],

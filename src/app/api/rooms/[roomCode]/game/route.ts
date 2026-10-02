@@ -1,4 +1,4 @@
-import { isSharedPlayerAuthenticated, performSharedGameAction, restartSharedMatch, type SharedGameAction } from "@/lib/shared-rooms";
+import { isSharedPlayerAuthenticated, performSharedGameAction, restartSharedMatch, startNextSharedRound, rematchSharedMatch, type SharedGameAction } from "@/lib/shared-rooms";
 import { readRoomSessionToken } from "@/lib/room-auth";
 
 type RouteContext = { params: Promise<{ roomCode: string }> };
@@ -8,13 +8,23 @@ export async function POST(request: Request, { params }: RouteContext) {
   const { roomCode } = await params;
   let body: { playerId?: unknown; type?: unknown; cardId?: unknown; reactionId?: unknown };
   try { body = await request.json(); } catch { return Response.json({ error: "That game action was not valid." }, { status: 400 }); }
-  if (typeof body.playerId !== "string" || !["pass", "jackpot", "suspect", "signal", "fake-signal", "reaction", "restart"].includes(String(body.type))) {
+  if (typeof body.playerId !== "string" || !["pass", "jackpot", "suspect", "signal", "fake-signal", "reaction", "restart", "next-round", "rematch"].includes(String(body.type))) {
     return Response.json({ error: "That game action is not available." }, { status: 400 });
   }
   if (!await isSharedPlayerAuthenticated(roomCode, body.playerId, readRoomSessionToken(request, roomCode))) return Response.json({ error: "Reconnect to the room before playing." }, { status: 401 });
   if (body.type === "restart") {
     const restarted = await restartSharedMatch(roomCode, body.playerId);
     if (!restarted.room) return Response.json({ error: restarted.error }, { status: 403 });
+    return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+  }
+  if (body.type === "next-round") {
+    const nextRound = await startNextSharedRound(roomCode, body.playerId);
+    if (!nextRound.room) return Response.json({ error: nextRound.error }, { status: 403 });
+    return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+  }
+  if (body.type === "rematch") {
+    const rematched = await rematchSharedMatch(roomCode, body.playerId);
+    if (!rematched.room) return Response.json({ error: rematched.error }, { status: 403 });
     return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
   }
   if (body.type === "pass" && typeof body.cardId !== "string") return Response.json({ error: "Choose a card in your hand." }, { status: 400 });
