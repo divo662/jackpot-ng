@@ -22,16 +22,17 @@
   box-sizing: border-box;
 }
 
-html {
-  scroll-behavior: smooth;
-}
-
+html,
 body {
   margin: 0;
+  padding: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   font-family: var(--font-geist-sans), "Segoe UI", sans-serif;
-  background: #090b10;
+  background-color: #120904 !important;
   color: var(--white);
+  scroll-behavior: smooth;
+  overscroll-behavior-y: none;
 }
 
 button,
@@ -3994,14 +3995,16 @@ button {
 /* ——— Reference table layout ——— */
 
 .scene-frame.table-frame {
-  background: #090b10;
-  border-color: #08090c;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 24px 60px rgba(0, 0, 0, 0.56);
+  background: #150a04;
+  border-color: #26140b;
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.15), 0 24px 60px rgba(0, 0, 0, 0.7);
 }
 
 .table-screen {
-  padding: 8px 10px 10px;
-  background: linear-gradient(180deg, #11151c, #080a0f 70%);
+  padding: 0;
+  background:
+    radial-gradient(ellipse at 50% 10%, rgba(245, 158, 11, 0.08), transparent 60%),
+    linear-gradient(180deg, #1f0f07 0%, #120803 100%);
 }
 
 .table-topbar {

@@ -1853,27 +1853,11 @@ export function JackpotApp() {
                   <h2 className="card-title">Join Match</h2>
                 </div>
 
-                {/* If joinCode is present e.g. from invite link */}
-                {joinCode ? (
-                  <div className="room-target-callout">
-                    <div className="target-code-header">
-                      <span className="target-tag">INVITED ROOM</span>
-                      <button
-                        type="button"
-                        className="change-code-link"
-                        onClick={() => setJoinCode("")}
-                      >
-                        Change Code
-                      </button>
-                    </div>
-                    <strong className="target-code-val">{joinCode}</strong>
-                  </div>
-                ) : (
                   <div className="name-field-card config-name-card">
                     <div className="name-field-header">
                       <span className="field-label">ROOM CODE</span>
                       <span className="edit-pill-badge" aria-hidden="true">
-                        From Host
+                        {pathname.startsWith("/join/") ? "From Link" : "From Host"}
                       </span>
                     </div>
 
@@ -1882,9 +1866,10 @@ export function JackpotApp() {
                         id="join-room-code-input"
                         value={joinCode}
                         onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-                        maxLength={10}
+                        maxLength={12}
                         placeholder="e.g. JKP-482"
                         autoCapitalize="characters"
+                        autoFocus={!joinCode}
                       />
                       <span className="input-pencil-icon" aria-hidden="true">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -1901,10 +1886,9 @@ export function JackpotApp() {
                         <line x1="12" y1="16" x2="12" y2="12" />
                         <line x1="12" y1="8" x2="12.01" y2="8" />
                       </svg>
-                      Enter the 6-character code (e.g. JKP-482) provided by the host.
+                      Enter the room code (e.g. JKP-482) provided by the host.
                     </span>
                   </div>
-                )}
 
                 {/* Nickname input well */}
                 <div className="name-field-card config-name-card">
