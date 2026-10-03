@@ -316,14 +316,16 @@ export function JackpotApp() {
       const routeCode = pathname.startsWith("/room/")
         ? decodeURIComponent(pathname.split("/")[2] ?? "")
         : "";
-      const savedRoom = routeCode ? findRoom(routeCode) : savedSession?.roomCode ? findRoom(savedSession.roomCode) : null;
+      const savedRoom = routeCode ? findRoom(routeCode) : null;
 
       const savedSignal = window.localStorage.getItem("jackpot:signal:v1");
       if (savedSignal && signalLibrary.some((signal) => signal.id === savedSignal)) setSelectedSignal(savedSignal);
       if (savedSession) {
         setSession(savedSession);
         setNickname(normalizePlayerName(savedSession.nickname));
-        setRoomCode(routeCode || savedSession.roomCode || "");
+        if (routeCode) {
+          setRoomCode(routeCode);
+        }
       } else if (routeCode) {
         setRoomCode(routeCode);
       }
@@ -396,7 +398,7 @@ export function JackpotApp() {
 
   // Poll the authoritative room so every browser sees the same teams, game state, and results.
   useEffect(() => {
-    if (!hydrated || !roomCode || screen === "join") return;
+    if (!hydrated || !roomCode || !pathname.startsWith("/room/")) return;
     let active = true;
     const syncLobby = async () => {
       try {
@@ -482,14 +484,16 @@ export function JackpotApp() {
             showTableToast(shared.result.valid ? "success" : "warning", shared.result.title, shared.result.detail);
           }
         }
-        if (shared.teamPhase === "strategy" && !pathname.endsWith("/signal")) {
-          router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
-        } else if (shared.teamPhase === "game" && !pathname.endsWith("/table")) {
-          router.replace(`/room/${encodeURIComponent(roomCode)}/table`);
-        } else if (shared.status === "result" && !pathname.endsWith("/result")) {
-          router.replace(`/room/${encodeURIComponent(roomCode)}/result`);
-        } else if (shared.teamPhase === "strategy" && pathname.endsWith("/result")) {
-          router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
+        if (pathname.startsWith("/room/")) {
+          if (shared.teamPhase === "strategy" && !pathname.endsWith("/signal")) {
+            router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
+          } else if (shared.teamPhase === "game" && !pathname.endsWith("/table")) {
+            router.replace(`/room/${encodeURIComponent(roomCode)}/table`);
+          } else if (shared.status === "result" && !pathname.endsWith("/result")) {
+            router.replace(`/room/${encodeURIComponent(roomCode)}/result`);
+          } else if (shared.teamPhase === "strategy" && pathname.endsWith("/result")) {
+            router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
+          }
         }
       } catch {
         // The saved local room remains usable while the room server is unavailable.
@@ -1193,6 +1197,34 @@ export function JackpotApp() {
       beginRound(1);
     }
   };
+
+  const handleExitHome = useCallback(() => {
+    const currentCode = roomCode;
+    const currentPid = session?.playerId;
+    setGame(null);
+    setResult(null);
+    setRoom(null);
+    setRoomCode("");
+    if (session) {
+      writeSession({ ...session, roomCode: "" });
+    }
+    if (currentCode && currentPid) {
+      void fetch(`/api/rooms/${encodeURIComponent(currentCode)}?playerId=${encodeURIComponent(currentPid)}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+    router.push("/");
+  }, [roomCode, router, session]);
+
+  // Play sound effect whenever entering the result screen
+  useEffect(() => {
+    if (screen !== "result" || !result) return;
+    if (result.valid) {
+      playCue("jackpot");
+    } else {
+      playCue("false_call");
+    }
+  }, [screen, result, playCue]);
 
   const handleShareResult = async () => {
     const winner = matchWonTeam ?? "Alpha";
@@ -3447,7 +3479,7 @@ export function JackpotApp() {
                     <button
                       type="button"
                       className="table-modal-btn exit-btn"
-                      onClick={() => navigate("home")}
+                      onClick={handleExitHome}
                     >
                       Exit Home
                     </button>
@@ -3460,47 +3492,147 @@ export function JackpotApp() {
 
         {screen === "result" && result && (
           <section className="result-screen">
-            {result.valid ? <div className="confetti-burst" aria-hidden="true">{Array.from({ length: 36 }, (_, index) => <i key={index} style={{ left: `${(index * 37) % 100}%`, animationDelay: `${(index % 9) * 0.07}s`, backgroundColor: ["#f6cd68", "#43d7c1", "#ff7387", "#8da5ff", "#fff1c7"][index % 5] }} />)}</div> : null}
-            <div className={`result-box ${result.valid ? "win" : "miss"}`}>
-              <span className="mini-tag">Round {round} resolved</span>
-              <h2>{result.title}</h2>
-              <p>{result.detail}</p>
-
-              <div className="result-grid four">
-                {scoreTeams.map((team) => (
-                  <div key={team} className="result-stat">
-                    <small>{team}</small>
-                    <strong>{scores[team]}</strong>
-                  </div>
-                ))}
+            <header className="jackpot-nav">
+              <div
+                className="jackpot-wordmark"
+                onClick={handleExitHome}
+                role="button"
+                tabIndex={0}
+                style={{ cursor: "pointer" }}
+              >
+                <span className="wordmark-crown">♛</span>
+                <strong>JACKPOT</strong>
+                <small>ROUND {round} RESOLUTION</small>
               </div>
+              <div className="jackpot-nav-tools">
+                <MiniMusicPlayer />
+                <button
+                  type="button"
+                  className="ghost-btn jackpot-back-btn"
+                  onClick={handleExitHome}
+                  aria-label="Exit Home"
+                >
+                  <span className="back-btn-text">← Exit Home</span>
+                  <span className="back-btn-mobile-text">← Exit</span>
+                </button>
+              </div>
+            </header>
 
-              <div className="cta-row split">
-                <button
-                  type="button"
-                  className="primary-btn"
-                  disabled={room?.gameAuthoritative && room.hostPlayerId !== session?.playerId}
-                  onClick={() => {
-                    if (room?.gameAuthoritative) void requestServerGameAction("restart");
-                    else {
-                      setRound((value) => value + 1);
-                      beginRound();
-                    }
-                  }}
-                >
-                  {room?.gameAuthoritative ? room.hostPlayerId === session?.playerId ? "Restart game" : "Waiting for host" : "Next round"}
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => {
-                    setGame(null);
-                    setResult(null);
-                    navigate("home");
-                  }}
-                >
-                  Exit home
-                </button>
+            <div className="result-container-wrap">
+              {result.valid ? (
+                <div className="confetti-burst" aria-hidden="true">
+                  {Array.from({ length: 48 }, (_, index) => (
+                    <i
+                      key={index}
+                      style={{
+                        left: `${(index * 23) % 100}%`,
+                        animationDelay: `${(index % 12) * 0.06}s`,
+                        backgroundColor: ["#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#fef08a", "#a855f7"][index % 6],
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              <div className={`result-card-luxury ${result.valid ? "outcome-win" : "outcome-miss"}`}>
+                <div className="result-card-glow-edge" />
+
+                {/* Outcome Header Pill & Hero Icon */}
+                <div className="result-header-row">
+                  <div className={`result-emblem-badge ${result.valid ? "emblem-gold" : "emblem-ruby"}`}>
+                    <span className="result-emblem-icon">{result.valid ? "🏆" : "🚨"}</span>
+                  </div>
+                  <div className="result-tag-cluster">
+                    <span className={`result-status-pill ${result.valid ? "status-win" : "status-miss"}`}>
+                      {result.valid ? "✦ JACKPOT SCORED ✦" : "⚠ FALSE CALL / BLUFF BUSTED"}
+                    </span>
+                    <span className="result-round-pill">ROUND {round} RESOLVED</span>
+                  </div>
+                </div>
+
+                <div className="result-narrative">
+                  <h2 className="result-headline">{result.title}</h2>
+                  <p className="result-description">{result.detail}</p>
+                </div>
+
+                {/* Match Race Tracker: J-A-C-K-P-O-T Progress for each team */}
+                <div className="result-race-board">
+                  <div className="result-race-header">
+                    <span className="race-header-title">🏁 MATCH RACE STANDINGS</span>
+                    <span className="race-header-subtitle">Spell J-A-C-K-P-O-T (7 Letters) to Win</span>
+                  </div>
+                  <div className="result-race-tracks">
+                    {scoreTeams.map((team) => {
+                      const count = Math.min(7, Math.max(0, scores[team] ?? 0));
+                      const isLeader = count === Math.max(...scoreTeams.map((t) => scores[t] ?? 0));
+                      return (
+                        <div key={team} className={`result-team-track ${isLeader && count > 0 ? "leader-track" : ""}`}>
+                          <div className="team-track-info">
+                            <span className="team-track-name">{team}</span>
+                            <span className="team-track-score-badge">{count}/7</span>
+                          </div>
+                          <div className="team-track-letters" aria-label={`${team} has ${count} letters`}>
+                            {JACKPOT_LETTERS.map((letter, idx) => {
+                              const active = idx < count;
+                              return (
+                                <span
+                                  key={letter}
+                                  className={`result-letter-token ${active ? "active-letter" : "empty-letter"}`}
+                                  title={`${team} Letter ${letter} ${active ? "Earned" : "Remaining"}`}
+                                >
+                                  {letter}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Action Buttons Panel */}
+                <div className="result-action-panel">
+                  {room?.gameAuthoritative && room.hostPlayerId !== session?.playerId ? (
+                    <div className="result-waiting-host-box">
+                      <span className="result-pulse-dot" />
+                      <span>Waiting for room host to initiate the next round…</span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="result-primary-btn"
+                      onClick={() => {
+                        if (room?.gameAuthoritative) void requestServerGameAction("restart");
+                        else {
+                          setRound((value) => value + 1);
+                          beginRound();
+                        }
+                      }}
+                    >
+                      <span className="btn-sparkle">✦</span>
+                      <span>{room?.gameAuthoritative ? (matchWonTeam ? "Start New Match" : "Deal Next Round") : `Deal Round ${round + 1}`}</span>
+                      <span className="btn-arrow">➔</span>
+                    </button>
+                  )}
+
+                  <div className="result-secondary-row">
+                    <button
+                      type="button"
+                      className="result-secondary-btn"
+                      onClick={handleShareResult}
+                    >
+                      <span>📋 Share Results</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="result-exit-btn"
+                      onClick={handleExitHome}
+                    >
+                      <span>🚪 Exit to Main Menu</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
