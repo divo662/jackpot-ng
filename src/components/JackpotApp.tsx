@@ -4,6 +4,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type
 import { usePathname, useRouter } from "next/navigation";
 import { CardFan, WhotCard } from "@/components/WhotCard";
 import { MiniMusicPlayer } from "@/components/MiniMusicPlayer";
+import { HowToPlayInteractive } from "@/components/HowToPlayInteractive";
 import landingBackground from "@/assets/images/home-bg.jpg";
 import mobileLandingBackground from "@/assets/images/mobile-bg.jpg";
 import { DEFAULT_PLAYER_NAMES, type PlayerSlot, type Team } from "@/lib/deck";
@@ -124,6 +125,17 @@ export function JackpotApp() {
   const [tableToasts, setTableToasts] = useState<TableToast[]>([]);
   const [passFlight, setPassFlight] = useState<PassFlight | null>(null);
   const [reactionBursts, setReactionBursts] = useState<ReactionEvent[]>([]);
+  const [signalBursts, setSignalBursts] = useState<
+    Array<{
+      id: string;
+      playerId: string;
+      playerName: string;
+      signalId: string;
+      symbol: string;
+      label: string;
+      actionText: string;
+    }>
+  >([]);
   const [busy, setBusy] = useState(false);
   const tableRef = useRef<HTMLDivElement>(null);
   const lastPassEventId = useRef("");
@@ -208,14 +220,36 @@ export function JackpotApp() {
 
   const notifySignal = useCallback((signal: NonNullable<GameSnapshot["publicSignals"]>[number]) => {
     playCue("signal");
-    const label = signalLibrary.find((item) => item.id === signal.signalId)?.label ?? "a signal";
+    const meta = signalLibrary.find((item) => item.id === signal.signalId) ?? {
+      id: signal.signalId,
+      label: "Signal",
+      symbol: "👋",
+      category: "Gesture",
+      description: "",
+      stealthLevel: "Moderate",
+      actionText: "threw a signal",
+    };
+
     if (preferences.animationsEnabled) {
-      setSignalFlash(true);
-      setSignalClock(Date.now());
-      window.setTimeout(() => setSignalFlash(false), 900);
+      const burst = {
+        id: signal.id,
+        playerId: signal.playerId,
+        playerName: signal.playerName,
+        signalId: signal.signalId,
+        symbol: meta.symbol,
+        label: meta.label,
+        actionText: meta.actionText,
+      };
+      setSignalBursts((current) => [...current.filter((entry) => entry.playerId !== signal.playerId), burst]);
+      const timerKey = `signal-${signal.id}`;
+      const timer = window.setTimeout(() => {
+        setSignalBursts((current) => current.filter((entry) => entry.id !== signal.id));
+        toastTimers.current.delete(timerKey);
+      }, 4500);
+      toastTimers.current.set(timerKey, timer);
     }
-    showTableToast("game", "Signal flashed", `${signal.playerName} flashed ${label}.`);
-  }, [playCue, preferences.animationsEnabled, showTableToast]);
+    setStatus(`${signal.playerName}: ${meta.symbol} ${meta.label}`);
+  }, [playCue, preferences.animationsEnabled]);
 
   const displayReaction = useCallback((reaction: ReactionEvent) => {
     playCue("reaction");
@@ -1249,10 +1283,29 @@ export function JackpotApp() {
 
     setBusy(true);
 
-    // Occasional auto JACKPOT if this AI (or partner) has four-of-a-kind.
     const ownFour = findFourOfAKind(actor.hand);
     const mate = getPartner(snapshot.players, actor.id);
     const mateFour = mate ? findFourOfAKind(mate.hand) : null;
+
+    // Partner flashes the agreed secret signal to you when they hold four-of-a-kind!
+    if (ownFour && actor.id === partner?.id && Math.random() < 0.7) {
+      const createdAt = Date.now();
+      const event = {
+        id: `signal-${createdAt}`,
+        playerId: actor.id,
+        playerName: actor.name,
+        signalId: selectedSignal,
+        createdAt,
+        expiresAt: createdAt + SIGNAL_DECISION_WINDOW_MS,
+      };
+      const nextGame = {
+        ...snapshot,
+        publicSignals: [...(snapshot.publicSignals ?? []), event].slice(-20),
+        log: [`${actor.name} flashed the team signal.`, ...snapshot.log].slice(0, 40),
+      };
+      setGame(nextGame);
+      notifySignal(event);
+    }
 
     if ((ownFour || mateFour) && Math.random() < 0.35) {
       window.setTimeout(() => {
@@ -1525,51 +1578,43 @@ export function JackpotApp() {
         )}
 
         {screen === "howto" && (
-          <section className="screen-panel">
-            <div className="panel-top">
-              <div>
-                <span className="mini-tag">Rules</span>
-                <h2>How Jackpot works</h2>
+          <section
+            className="hero-screen lobby-home jackpot-home jackpot-subpage howto-subpage"
+            style={{
+              "--landing-bg-desktop": `url("${landingBackground.src}")`,
+              "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
+            } as React.CSSProperties}
+          >
+            <header className="jackpot-nav">
+              <div
+                className="jackpot-wordmark"
+                onClick={() => navigate("home")}
+                role="button"
+                tabIndex={0}
+                style={{ cursor: "pointer" }}
+              >
+                <span className="wordmark-crown">♛</span>
+                <strong>JACKPOT</strong>
+                <small>RULES &amp; STRATEGY</small>
               </div>
-              <button type="button" className="ghost-btn" onClick={() => navigate("home")}>
-                Back
-              </button>
-            </div>
-            <div className="howto-grid">
-              <article className="howto-card">
-                <h3>The deck</h3>
-                <p>
-                  8 shapes × 4 cards = 32. No ranks — only the shape matters. Goal: hold all
-                  four of one shape.
-                </p>
-              </article>
-              <article className="howto-card">
-                <h3>Passing</h3>
-                <p>
-                  One seat always holds one extra pass card (a spare token or a shape).
-                  Pass one card clockwise. The spare token does not count toward four-of-a-kind.
-                </p>
-              </article>
-              <article className="howto-card">
-                <h3>Teams &amp; signal</h3>
-                <p>
-                  Partners sit opposite (same team color). Agree a private signal. When you
-                  (or your partner) have four-of-a-kind, flash the signal then call JACKPOT.
-                </p>
-              </article>
-              <article className="howto-card">
-                <h3>Calls</h3>
-                <p>
-                  <strong>JACKPOT</strong> scores if your team holds four-of-a-kind.
-                  <strong> SUSPECT</strong> scores if an opposing team does. False calls score
-                  nothing.
-                </p>
-              </article>
-            </div>
-            <div className="cta-row">
-              <button type="button" className="primary-btn" onClick={() => navigate("create")}>
-                Create room
-              </button>
+              <div className="jackpot-nav-tools">
+                <MiniMusicPlayer />
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => navigate("home")}
+                >
+                  ← Back to Menu
+                </button>
+              </div>
+            </header>
+
+            <div className="jackpot-subpage-content howto-subpage-content">
+              <HowToPlayInteractive
+                onBack={() => navigate("home")}
+                onCreateRoom={() => navigate("create")}
+                onJoinRoom={() => navigate("join")}
+              />
             </div>
           </section>
         )}
@@ -3006,38 +3051,31 @@ export function JackpotApp() {
                       <span>You have four {yourFour}s. Flash your signal!</span>
                     </div>
                   ) : null}
-
-                  {/* Flashed Signal Pressure Banner */}
-                  {signalWindowActive && latestPublicSignal ? (
-                    <div className={`center-signal-alert ${signalSecondsRemaining <= 15 ? "urgent" : ""}`} role="status">
-                      <span className="signal-alert-icon">{latestSignalMeta?.symbol ?? "✦"}</span>
-                      <div className="signal-alert-copy">
-                        <strong>{latestPublicSignal.playerName} flashed a signal!</strong>
-                        <small>Trust: JACKPOT · Challenge: SUSPECT</small>
-                      </div>
-                      <time className="signal-alert-timer">0:{String(signalSecondsRemaining).padStart(2, "0")}</time>
-                    </div>
-                  ) : null}
                 </div>
 
                 {/* Seated Players */}
-                {seated.map((player, visualIndex) => (
-                  <TableSeat
-                    key={player.id}
-                    player={player}
-                    visualIndex={visualIndex}
-                    playerCount={seated.length}
-                    isActive={player.id === game.activePlayerId}
-                    isYou={player.id === viewerPlayerId}
-                    isTeammate={player.id !== viewerPlayerId && player.team === you?.team}
-                    peek={false}
-                    selectedCardId={selectedCardId}
-                    canSelect={isYourPass && !busy}
-                    onSelectCard={setSelectedCardId}
-                    reaction={reactionBursts.filter((entry) => entry.playerId === player.id).at(-1)}
-                    hasFourOfAKind={player.id === viewerPlayerId && Boolean(yourFour)}
-                  />
-                ))}
+                {seated.map((player, visualIndex) => {
+                  const playerSignal = signalBursts.find((entry) => entry.playerId === player.id) ?? null;
+
+                  return (
+                    <TableSeat
+                      key={player.id}
+                      player={player}
+                      visualIndex={visualIndex}
+                      playerCount={seated.length}
+                      isActive={player.id === game.activePlayerId}
+                      isYou={player.id === viewerPlayerId}
+                      isTeammate={player.id !== viewerPlayerId && player.team === you?.team}
+                      peek={false}
+                      selectedCardId={selectedCardId}
+                      canSelect={isYourPass && !busy}
+                      onSelectCard={setSelectedCardId}
+                      reaction={reactionBursts.filter((entry) => entry.playerId === player.id).at(-1)}
+                      hasFourOfAKind={player.id === viewerPlayerId && Boolean(yourFour)}
+                      activeSignal={playerSignal}
+                    />
+                  );
+                })}
 
                 {/* Bottom Action Dock */}
                 <div className="table-action-dock">
@@ -3078,18 +3116,18 @@ export function JackpotApp() {
                       aria-expanded={signalMenuOpen}
                       onClick={() => setSignalMenuOpen((open) => !open)}
                     >
-                      <div className="dock-btn-icon-wrap">≋</div>
+                      <div className="dock-btn-icon-wrap">{selectedSignalMeta.symbol}</div>
                       <div className="dock-btn-label-group">
                         <strong>SIGNAL ▾</strong>
-                        <small>Real cue or decoy</small>
+                        <small>{selectedSignalMeta.label}</small>
                       </div>
                     </button>
                     {signalMenuOpen && (
                       <div className="signal-dock-menu">
                         <button type="button" onClick={onSignal} className="signal-menu-item">
-                          <span>≋</span>
+                          <span>{selectedSignalMeta.symbol}</span>
                           <div className="menu-text">
-                            <strong>Flash Team Signal</strong>
+                            <strong>Flash Signal</strong>
                             <small>{selectedSignalMeta.label}</small>
                           </div>
                         </button>
@@ -3097,7 +3135,7 @@ export function JackpotApp() {
                           <span>🎭</span>
                           <div className="menu-text">
                             <strong>Fake Signal</strong>
-                            <small>Decoy to bait suspect</small>
+                            <small>Bluff decoy gesture</small>
                           </div>
                         </button>
                       </div>
@@ -3415,6 +3453,7 @@ function TableSeat({
   onSelectCard,
   reaction,
   hasFourOfAKind,
+  activeSignal,
 }: {
   player: PlayerSlot;
   visualIndex: number;
@@ -3428,6 +3467,7 @@ function TableSeat({
   onSelectCard: (id: string) => void;
   reaction?: ReactionEvent;
   hasFourOfAKind?: boolean;
+  activeSignal?: { symbol: string; label: string; id: string } | null;
 }) {
   const seatClass = SEAT_CLASS_BY_COUNT[playerCount]?.[visualIndex] ?? SEAT_CLASS_BY_COUNT[8][visualIndex];
   const count = player.hand.length;
@@ -3441,13 +3481,22 @@ function TableSeat({
         isActive ? "is-active" : "",
         player.isStarter ? "is-starter" : "",
         isYou ? "is-you" : "",
+        activeSignal ? "seat-is-signaling" : "",
       ]
         .filter(Boolean)
         .join(" ")}
       data-seat-id={player.id}
     >
+      {/* Active Signal Gesture Bubble directly over the signaling player's avatar */}
+      {activeSignal && (
+        <div key={activeSignal.id} className="seat-signal-bubble" role="status" aria-label={`${player.name} signaled`}>
+          <span className="seat-signal-symbol">{activeSignal.symbol}</span>
+          <span className="seat-signal-label">{activeSignal.label}</span>
+        </div>
+      )}
+
       {/* Reaction Speech Bubble */}
-      {reaction && (
+      {reaction && !activeSignal && (
         <div key={reaction.id} className="reaction-burst-bubble" aria-label={`${reaction.playerName} reacted`}>
           <span className="reaction-burst-symbol">
             {quickReactions.find((item) => item.id === reaction.reactionId)?.symbol ?? "✨"}

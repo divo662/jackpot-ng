@@ -21,28 +21,28 @@ const SUIT_LABELS: Record<Suit, string> = {
   moon: "Moon",
 };
 
-/** One deterministic SVG mark per suit so every card face has a visible shape. */
+/** One deterministic SVG mark per suit that scales smoothly with card container. */
 function SuitMark({ suit, size = "lg" }: { suit: Suit; size?: "sm" | "lg" }) {
-  const dim = size === "sm" ? 14 : 36;
+  const cls = size === "sm" ? "suit-mark-sm" : "suit-mark-lg";
 
   switch (suit) {
     case "circle":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <circle cx="20" cy="20" r="12.5" fill="currentColor" />
           <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.28" />
         </svg>
       );
     case "triangle":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <polygon points="20,4 34,32 6,32" fill="currentColor" />
           <polygon points="20,10 29,28 11,28" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.25" />
         </svg>
       );
     case "cross":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <rect x="15" y="4" width="10" height="32" rx="2" fill="currentColor" />
           <rect x="4" y="15" width="32" height="10" rx="2" fill="currentColor" />
           <rect x="15" y="9" width="10" height="22" rx="2" fill="none" stroke="rgba(0,0,0,0.18)" strokeWidth="1.2" />
@@ -50,14 +50,14 @@ function SuitMark({ suit, size = "lg" }: { suit: Suit; size?: "sm" | "lg" }) {
       );
     case "square":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <rect x="7" y="7" width="26" height="26" rx="3" fill="currentColor" />
           <rect x="11" y="11" width="18" height="18" rx="2" fill="none" stroke="rgba(0,0,0,0.18)" strokeWidth="1.4" />
         </svg>
       );
     case "star":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <polygon
             points="20,3 24.5,15 37,15 27,23 31,36 20,28 9,36 13,23 3,15 15.5,15"
             fill="currentColor"
@@ -72,14 +72,14 @@ function SuitMark({ suit, size = "lg" }: { suit: Suit; size?: "sm" | "lg" }) {
       );
     case "diamond":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <polygon points="20,4 34,20 20,36 6,20" fill="currentColor" />
           <polygon points="20,10 29,20 20,30 11,20" fill="none" stroke="rgba(0,0,0,0.18)" strokeWidth="1.2" />
         </svg>
       );
     case "heart":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <path
             d="M20 34 C20 34 6 24 6 14.5 C6 9.5 10 6 14.5 6 C17.5 6 19.5 7.8 20 10 C20.5 7.8 22.5 6 25.5 6 C30 6 34 9.5 34 14.5 C34 24 20 34 20 34 Z"
             fill="currentColor"
@@ -94,7 +94,7 @@ function SuitMark({ suit, size = "lg" }: { suit: Suit; size?: "sm" | "lg" }) {
       );
     case "moon":
       return (
-        <svg width={dim} height={dim} viewBox="0 0 40 40" aria-hidden>
+        <svg viewBox="0 0 40 40" className={cls} aria-hidden>
           <path
             d="M29 5 C18 7 12 14 12 22 C12 30 18 36 27 35 C20 32 17 27 18 20 C19 13 23 8 29 5 Z"
             fill="currentColor"
