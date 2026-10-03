@@ -306,7 +306,7 @@ export async function touchSharedPlayerPresence(code: string, playerId: string):
   const updated: SharedRoom = {
     ...room,
     players: room.players.map((p) => p.id === playerId ? { ...p, lastSeen: now } : p),
-    updatedAt: nextUpdatedAt(room),
+    updatedAt: room.status === "table" ? room.updatedAt : nextUpdatedAt(room),
   };
   await saveRoom(updated, room.updatedAt);
 }
@@ -565,108 +565,119 @@ async function finishStrategy(room: SharedRoom): Promise<SharedRoom> {
 export type SharedGameAction = { type: "pass"; playerId: string; cardId: string } | { type: "reaction"; playerId: string; reactionId: string } | { type: "jackpot" | "suspect" | "signal" | "fake-signal"; playerId: string };
 
 export async function performSharedGameAction(code: string, action: SharedGameAction): Promise<{ room?: SharedRoom; error?: string; notice?: string; suspectAttemptsRemaining?: SharedRoom["suspectAttemptsRemaining"] }> {
-  const room = await getSharedRoom(code);
-  if (!room || room.status !== "table" || !room.gameSnapshot) return { error: "The game table is not active." };
-  if (!room.players.some((player) => player.id === action.playerId)) return { error: "Your player session is not in this room." };
-  let game = room.gameSnapshot;
-  let scores = room.scores ?? emptyScores();
-  let result = room.result ?? null;
-  const suspectAttemptsRemaining: Record<"Alpha" | "Bravo", number> = {
-    Alpha: room.suspectAttemptsRemaining?.Alpha ?? SUSPECT_ATTEMPTS_PER_TEAM,
-    Bravo: room.suspectAttemptsRemaining?.Bravo ?? SUSPECT_ATTEMPTS_PER_TEAM,
-  };
-  let notice = "";
+  const MAX_RETRIES = 4;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const room = await getSharedRoom(code);
+    if (!room || room.status !== "table" || !room.gameSnapshot) return { error: "The game table is not active." };
+    if (!room.players.some((player) => player.id === action.playerId)) return { error: "Your player session is not in this room." };
+    let game = room.gameSnapshot;
+    let scores = room.scores ?? emptyScores();
+    let result = room.result ?? null;
+    const suspectAttemptsRemaining: Record<"Alpha" | "Bravo", number> = {
+      Alpha: room.suspectAttemptsRemaining?.Alpha ?? SUSPECT_ATTEMPTS_PER_TEAM,
+      Bravo: room.suspectAttemptsRemaining?.Bravo ?? SUSPECT_ATTEMPTS_PER_TEAM,
+    };
+    let notice = "";
 
-  try {
-    if (action.type === "pass") {
-      game = passCard(game, action.playerId, action.cardId);
-    } else if (action.type === "jackpot") {
-      result = resolveJackpot(game, action.playerId);
-      scores = applyRoundScore(scores, result);
-    } else if (action.type === "suspect") {
-      const caller = game.players.find((player) => player.id === action.playerId);
-      if (!caller) return { error: "Your player session is not in this game." };
-      if (caller.team !== "Alpha" && caller.team !== "Bravo") return { error: "SUSPECT is not configured for this team." };
-      if ((suspectAttemptsRemaining[caller.team] ?? 0) <= 0) return { error: "Your team has used all three SUSPECT calls this round." };
-      result = resolveSuspect(game, action.playerId);
-      suspectAttemptsRemaining[caller.team] = (suspectAttemptsRemaining[caller.team] ?? 0) - 1;
-      const signalTruth = room.pendingSignalTruth;
-      const authenticity = signalTruth ? (signalTruth.isFake ? "The flashed signal was fake." : "The flashed signal was genuine.") : "";
-      const outcomeMessage = result.valid
-        ? `${caller.name} called SUSPECT correctly: an opposing player had four of a kind.`
-        : `${caller.name} called SUSPECT, but it was a false alarm: no opposing player had four of a kind.`;
-      const publicNotice = {
-        id: `notice-${crypto.randomUUID()}`,
-        kind: result.valid ? "success" as const : "warning" as const,
-        title: result.valid ? "SUSPECT CORRECT" : "FALSE SUSPECT — FALSE ALARM",
-        message: [outcomeMessage, authenticity, `${suspectAttemptsRemaining[caller.team]} team calls remain.`].filter(Boolean).join(" "),
-        createdAt: Date.now(),
-        ...(signalTruth ? { relatedSignalId: game.publicSignals?.at(-1)?.id } : {}),
-      };
-      game = {
-        ...game,
-        publicNotices: [...(game.publicNotices ?? []), publicNotice].slice(-20),
-        log: [publicNotice.message, ...game.log].slice(0, 40),
-      };
-      room.pendingSignalTruth = undefined;
-      if (result.valid) scores = applyRoundScore(scores, result);
-      else {
-        notice = `FALSE SUSPECT — ${suspectAttemptsRemaining[caller.team]} team calls remain.`;
-        game = { ...game, log: [`${result.detail} ${suspectAttemptsRemaining[caller.team]} SUSPECT calls remain.`, ...game.log].slice(0, 40) };
+    try {
+      if (action.type === "pass") {
+        game = passCard(game, action.playerId, action.cardId);
+      } else if (action.type === "jackpot") {
+        result = resolveJackpot(game, action.playerId);
+        scores = applyRoundScore(scores, result);
+      } else if (action.type === "suspect") {
+        const caller = game.players.find((player) => player.id === action.playerId);
+        if (!caller) return { error: "Your player session is not in this game." };
+        if (caller.team !== "Alpha" && caller.team !== "Bravo") return { error: "SUSPECT is not configured for this team." };
+        if ((suspectAttemptsRemaining[caller.team] ?? 0) <= 0) return { error: "Your team has used all three SUSPECT calls this round." };
+        result = resolveSuspect(game, action.playerId);
+        suspectAttemptsRemaining[caller.team] = (suspectAttemptsRemaining[caller.team] ?? 0) - 1;
+        const signalTruth = room.pendingSignalTruth;
+        const authenticity = signalTruth ? (signalTruth.isFake ? "The flashed signal was fake." : "The flashed signal was genuine.") : "";
+        const outcomeMessage = result.valid
+          ? `${caller.name} called SUSPECT correctly: an opposing player had four of a kind.`
+          : `${caller.name} called SUSPECT, but it was a false alarm: no opposing player had four of a kind.`;
+        const publicNotice = {
+          id: `notice-${crypto.randomUUID()}`,
+          kind: result.valid ? "success" as const : "warning" as const,
+          title: result.valid ? "SUSPECT CORRECT" : "FALSE SUSPECT — FALSE ALARM",
+          message: [outcomeMessage, authenticity, `${suspectAttemptsRemaining[caller.team]} team calls remain.`].filter(Boolean).join(" "),
+          createdAt: Date.now(),
+          ...(signalTruth ? { relatedSignalId: game.publicSignals?.at(-1)?.id } : {}),
+        };
+        game = {
+          ...game,
+          publicNotices: [...(game.publicNotices ?? []), publicNotice].slice(-20),
+          log: [publicNotice.message, ...game.log].slice(0, 40),
+        };
+        room.pendingSignalTruth = undefined;
+        if (result.valid) scores = applyRoundScore(scores, result);
+        else {
+          notice = `FALSE SUSPECT — ${suspectAttemptsRemaining[caller.team]} team calls remain.`;
+          game = { ...game, log: [`${result.detail} ${suspectAttemptsRemaining[caller.team]} SUSPECT calls remain.`, ...game.log].slice(0, 40) };
+        }
+      } else if (action.type === "reaction") {
+        const actor = game.players.find((player) => player.id === action.playerId);
+        const reactionIds = ["laugh", "cry", "eyes", "fire", "shock", "clap", "wow", "saw-that"];
+        if (!actor) return { error: "Your player session is not in this game." };
+        if (!reactionIds.includes(action.reactionId)) return { error: "Choose a reaction from the reaction bar." };
+        const lastReactionAt = room.playerReactionAt?.[actor.id] ?? 0;
+        if (Date.now() - lastReactionAt < 700) return { error: "Give your last reaction a moment before sending another." };
+        const event = { id: `reaction-${crypto.randomUUID()}`, playerId: actor.id, playerName: actor.name, reactionId: action.reactionId, createdAt: Date.now() };
+        game = { ...game, publicReactions: [...(game.publicReactions ?? []), event].slice(-20) };
+        notice = `${actor.name} reacted.`;
+        room.playerReactionAt = { ...room.playerReactionAt, [actor.id]: event.createdAt };
+      } else {
+        const actor = game.players.find((player) => player.id === action.playerId);
+        if (!actor) return { error: "Your player session is not in this game." };
+        if (actor.team !== "Alpha" && actor.team !== "Bravo") return { error: "Signals are not configured for this team." };
+        const teamSignal = room.teamSignals?.[actor.team] ?? "tap-table";
+        const signalIds = ALL_SIGNAL_IDS;
+        const decoys = signalIds.filter((signal) => signal !== teamSignal);
+        const signalId = action.type === "fake-signal" ? decoys[randomInt(decoys.length)] : teamSignal;
+        const createdAt = Date.now();
+        const isFake = action.type === "fake-signal";
+        const event = { id: `signal-${crypto.randomUUID()}`, playerId: actor.id, playerName: actor.name, signalId, createdAt, expiresAt: createdAt + SIGNAL_DECISION_WINDOW_MS };
+        room.pendingSignalTruth = { signalId, playerId: actor.id, playerName: actor.name, isFake, createdAt };
+        game = {
+          ...game,
+          publicSignals: [...(game.publicSignals ?? []), event].slice(-20),
+          log: [`${actor.name} flashed a ${signalId} signal.`, ...game.log].slice(0, 40),
+        };
+        notice = action.type === "fake-signal"
+          ? `Fake ${signalId} signal flashed.`
+          : `Your ${signalId} team signal was flashed.`;
       }
-    } else if (action.type === "reaction") {
-      const actor = game.players.find((player) => player.id === action.playerId);
-      const reactionIds = ["laugh", "cry", "eyes", "fire", "shock", "clap", "wow", "saw-that"];
-      if (!actor) return { error: "Your player session is not in this game." };
-      if (!reactionIds.includes(action.reactionId)) return { error: "Choose a reaction from the reaction bar." };
-      const lastReactionAt = room.playerReactionAt?.[actor.id] ?? 0;
-      if (Date.now() - lastReactionAt < 700) return { error: "Give your last reaction a moment before sending another." };
-      const event = { id: `reaction-${crypto.randomUUID()}`, playerId: actor.id, playerName: actor.name, reactionId: action.reactionId, createdAt: Date.now() };
-      game = { ...game, publicReactions: [...(game.publicReactions ?? []), event].slice(-20) };
-      notice = `${actor.name} reacted.`;
-      room.playerReactionAt = { ...room.playerReactionAt, [actor.id]: event.createdAt };
-    } else {
-      const actor = game.players.find((player) => player.id === action.playerId);
-      if (!actor) return { error: "Your player session is not in this game." };
-      if (actor.team !== "Alpha" && actor.team !== "Bravo") return { error: "Signals are not configured for this team." };
-      const teamSignal = room.teamSignals?.[actor.team] ?? "tap-table";
-      const signalIds = ALL_SIGNAL_IDS;
-      const decoys = signalIds.filter((signal) => signal !== teamSignal);
-      const signalId = action.type === "fake-signal" ? decoys[randomInt(decoys.length)] : teamSignal;
-      const createdAt = Date.now();
-      const isFake = action.type === "fake-signal";
-      const event = { id: `signal-${crypto.randomUUID()}`, playerId: actor.id, playerName: actor.name, signalId, createdAt, expiresAt: createdAt + SIGNAL_DECISION_WINDOW_MS };
-      room.pendingSignalTruth = { signalId, playerId: actor.id, playerName: actor.name, isFake, createdAt };
-      game = {
-        ...game,
-        publicSignals: [...(game.publicSignals ?? []), event].slice(-20),
-        log: [`${actor.name} flashed a ${signalId} signal.`, ...game.log].slice(0, 40),
-      };
-      notice = action.type === "fake-signal"
-        ? `Fake ${signalId} signal flashed.`
-        : `Your ${signalId} team signal was flashed.`;
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "That game action is no longer available." };
     }
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : "That game action is no longer available." };
-  }
 
-  const resolved = action.type === "jackpot" || (action.type === "suspect" && Boolean(result?.valid));
-  const next: SharedRoom = {
-    ...room,
-    gameSnapshot: game,
-    scores,
-    suspectAttemptsRemaining,
-    result: resolved ? result : null,
-    status: resolved ? "result" : "table",
-    teamPhase: resolved ? "result" : "game",
-    updatedAt: nextUpdatedAt(room),
-  };
-  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now; reload the room and try again." };
-  return {
-    room: next,
-    notice: notice || (result ? `${result.title}: ${result.detail}` : ""),
-    suspectAttemptsRemaining,
-  };
+    const resolved = action.type === "jackpot" || (action.type === "suspect" && Boolean(result?.valid));
+    const next: SharedRoom = {
+      ...room,
+      gameSnapshot: game,
+      scores,
+      suspectAttemptsRemaining,
+      result: resolved ? result : null,
+      status: resolved ? "result" : "table",
+      teamPhase: resolved ? "result" : "game",
+      updatedAt: nextUpdatedAt(room),
+    };
+    const saved = await saveRoom(next, room.updatedAt);
+    if (saved) {
+      return {
+        room: next,
+        notice: notice || (result ? `${result.title}: ${result.detail}` : ""),
+        suspectAttemptsRemaining,
+      };
+    }
+    // Concurrency conflict occurred (e.g. heartbeat or concurrent poll).
+    // Wait briefly with random jitter and re-apply on the latest room state.
+    if (attempt < MAX_RETRIES - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25 + Math.random() * 35));
+    }
+  }
+  return { error: "Room changed just now; please try again." };
 }
 
 export async function startNextSharedRound(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {

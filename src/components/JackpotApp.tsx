@@ -1036,12 +1036,22 @@ export function JackpotApp() {
     if (!room || !session || busy) return;
     setBusy(true);
     try {
-      const response = await fetch(`/api/rooms/${encodeURIComponent(room.code)}/game`, {
+      const sendRequest = () => fetch(`/api/rooms/${encodeURIComponent(room.code)}/game`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ playerId: session.playerId, type, ...(cardId ? { cardId } : {}), ...(reactionId ? { reactionId } : {}) }),
       });
-      const payload = await response.json() as { error?: string; notice?: string; suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"] };
+
+      let response = await sendRequest();
+      let payload = await response.json() as { error?: string; notice?: string; suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"] };
+      
+      // Auto-retry once if a concurrency conflict was encountered
+      if (response.status === 409 && payload.error?.toLowerCase().includes("room changed")) {
+        await new Promise((r) => setTimeout(r, 60));
+        response = await sendRequest();
+        payload = await response.json();
+      }
+
       if (!response.ok) {
         const message = payload.error ?? "That action is no longer available.";
         setStatus(message);
@@ -3170,37 +3180,67 @@ export function JackpotApp() {
 
             {/* Suspect Confirmation Modal */}
             {suspectModalOpen && (
-              <div className="table-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="suspect-modal-title">
+              <div
+                className="table-modal-backdrop"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="suspect-modal-title"
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) setSuspectModalOpen(false);
+                }}
+              >
                 <div className="table-modal-card suspect-modal">
-                  <div className="modal-header-icon danger">!</div>
+                  <div className="modal-badge-row">
+                    <span className="modal-micro-tag danger">INTERCEPTION CALL</span>
+                    <span className="modal-attempts-counter">{suspectAttemptsLeft} of 3 left</span>
+                  </div>
+
+                  <div className="modal-header-icon danger">
+                    <span className="header-icon-symbol">🚨</span>
+                  </div>
+
                   <h3 id="suspect-modal-title">CALL SUSPECT ON OPPONENTS?</h3>
                   <p className="modal-lead-text">
-                    Do you believe an opponent is holding four matching cards?
+                    Do you believe an opponent is holding <strong>four matching cards</strong> right now?
                   </p>
-                  <div className="modal-rules-box">
-                    <div className="rule-item success">
-                      <span className="rule-symbol">✓</span>
-                      <span><strong>IF CORRECT:</strong> CAUGHT! Your team earns +1 letter towards JACKPOT.</span>
+
+                  <div className="modal-rules-grid">
+                    <div className="modal-rule-card success">
+                      <div className="rule-card-header">
+                        <span className="rule-card-icon">✓</span>
+                        <strong>IF CORRECT</strong>
+                      </div>
+                      <p className="rule-card-desc">
+                        <strong>CAUGHT!</strong> Your team earns <strong>+1 letter</strong> towards JACKPOT.
+                      </p>
                     </div>
-                    <div className="rule-item penalty">
-                      <span className="rule-symbol">✗</span>
-                      <span><strong>IF WRONG:</strong> FALSE CALL! You lose 1 suspect attempt ({suspectAttemptsLeft} remaining).</span>
+
+                    <div className="modal-rule-card penalty">
+                      <div className="rule-card-header">
+                        <span className="rule-card-icon">✗</span>
+                        <strong>IF WRONG</strong>
+                      </div>
+                      <p className="rule-card-desc">
+                        <strong>FALSE ALARM!</strong> You lose 1 attempt ({suspectAttemptsLeft} remaining).
+                      </p>
                     </div>
                   </div>
+
                   <div className="modal-actions-row">
                     <button
                       type="button"
                       className="table-modal-btn confirm-suspect-btn"
                       onClick={executeSuspect}
                     >
-                      CALL IT NOW!
+                      <span className="btn-icon">🚨</span>
+                      <span>CALL IT NOW!</span>
                     </button>
                     <button
                       type="button"
                       className="table-modal-btn cancel-btn"
                       onClick={() => setSuspectModalOpen(false)}
                     >
-                      Cancel
+                      Never mind
                     </button>
                   </div>
                 </div>
@@ -3213,6 +3253,7 @@ export function JackpotApp() {
                 <div className="suspense-card">
                   <div className="suspense-radar-ring" />
                   <span className="suspense-icon">🔍</span>
+                  <span className="suspense-eyebrow">RADAR SCAN</span>
                   <h3>VERIFYING OPPONENT HANDS...</h3>
                   <p>Searching table for four of a kind</p>
                 </div>
@@ -3221,23 +3262,49 @@ export function JackpotApp() {
 
             {/* Jackpot Confirmation Modal */}
             {jackpotModalOpen && (
-              <div className="table-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="jackpot-modal-title">
+              <div
+                className="table-modal-backdrop"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="jackpot-modal-title"
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) setJackpotModalOpen(false);
+                }}
+              >
                 <div className="table-modal-card jackpot-modal">
-                  <div className="modal-header-icon gold">♛</div>
+                  <div className="modal-badge-row">
+                    <span className="modal-micro-tag gold">VICTORY DECLARATION</span>
+                  </div>
+
+                  <div className="modal-header-icon gold">
+                    <span className="header-icon-symbol">♛</span>
+                  </div>
+
                   <h3 id="jackpot-modal-title">CALL JACKPOT FOR YOUR TEAM?</h3>
                   <p className="modal-lead-text">
                     Are you confident your teammate has collected <strong>four of a kind</strong>?
                   </p>
-                  <p className="modal-subtext">
-                    If your teammate has four matching cards, your team wins the round and earns +1 letter towards JACKPOT!
-                  </p>
+
+                  <div className="modal-rules-grid single">
+                    <div className="modal-rule-card gold">
+                      <div className="rule-card-header">
+                        <span className="rule-card-icon">♛</span>
+                        <strong>ROUND VICTORY STAKES</strong>
+                      </div>
+                      <p className="rule-card-desc">
+                        If your teammate holds all 4 matching cards, your team wins the round and earns <strong>+1 letter</strong> towards winning the match!
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="modal-actions-row">
                     <button
                       type="button"
                       className="table-modal-btn confirm-jackpot-btn"
                       onClick={executeJackpot}
                     >
-                      CALL JACKPOT! ♛
+                      <span className="btn-icon">♛</span>
+                      <span>CALL JACKPOT!</span>
                     </button>
                     <button
                       type="button"
