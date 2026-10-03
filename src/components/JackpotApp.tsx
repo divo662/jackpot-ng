@@ -1601,10 +1601,12 @@ export function JackpotApp() {
                 <MiniMusicPlayer />
                 <button
                   type="button"
-                  className="ghost-btn"
+                  className="ghost-btn jackpot-back-btn"
                   onClick={() => navigate("home")}
+                  aria-label="Back to Menu"
                 >
-                  ← Back to Menu
+                  <span className="back-btn-text">← Back to Menu</span>
+                  <span className="back-btn-mobile-text">← Menu</span>
                 </button>
               </div>
             </header>

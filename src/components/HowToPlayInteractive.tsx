@@ -65,10 +65,6 @@ export function HowToPlayInteractive({ onBack, onCreateRoom, onJoinRoom }: HowTo
     <div className="how-page-root">
       {/* Top Navigation Bar */}
       <header className="how-topbar">
-        <button type="button" onClick={onBack} className="how-back-btn">
-          ← Back
-        </button>
-
         <div className="how-stepper-track" role="tablist" aria-label="Rulebook steps">
           {STEPS.map((s) => {
             const isActive = currentStep === s.step;

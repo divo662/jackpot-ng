@@ -233,6 +233,17 @@ button {
   z-index: 101;
 }
 
+.jackpot-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.back-btn-mobile-text {
+  display: none;
+}
+
 /* ——— Theme-Matching Sleek Mini Music Player ——— */
 .theme-music-player {
   display: inline-flex;
@@ -1052,34 +1063,50 @@ button {
   }
 
   .jackpot-wordmark strong {
-    font-size: 1.3rem;
-    letter-spacing: 0.1em;
+    font-size: 1.15rem;
+    letter-spacing: 0.06em;
   }
 
   .wordmark-crown {
-    font-size: 1.4rem;
+    font-size: 1.25rem;
   }
 
   .jackpot-nav-tools {
-    gap: 8px;
+    gap: 6px;
     flex-shrink: 0;
   }
 
   /* Theme Music Player Mobile */
   .theme-music-player {
-    height: 36px;
-    padding: 0 8px 0 4px;
-    gap: 6px;
+    height: 34px;
+    padding: 0 6px 0 3px;
+    gap: 4px;
   }
 
   .theme-player-disc {
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
   }
 
   .theme-player-title {
-    max-width: 70px;
-    font-size: 0.68rem;
+    max-width: 50px;
+    font-size: 0.65rem;
+  }
+
+  .jackpot-back-btn {
+    height: 34px !important;
+    padding: 0 10px !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    border-radius: 8px !important;
+  }
+
+  .back-btn-text {
+    display: none;
+  }
+
+  .back-btn-mobile-text {
+    display: inline;
   }
 
   .theme-player-btn {
@@ -1306,6 +1333,20 @@ button {
 }
 
 @media (max-width: 480px) {
+  .jackpot-wordmark strong {
+    font-size: 1.05rem;
+  }
+
+  .jackpot-wordmark {
+    gap: 5px;
+  }
+
+  .jackpot-back-btn {
+    padding: 0 8px !important;
+    height: 32px !important;
+    font-size: 0.74rem !important;
+  }
+
   .profile-name {
     display: none;
   }
