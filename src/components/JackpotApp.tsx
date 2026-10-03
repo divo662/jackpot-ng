@@ -8,7 +8,7 @@ import { HowToPlayInteractive } from "@/components/HowToPlayInteractive";
 import landingBackground from "@/assets/images/home-bg.jpg";
 import mobileLandingBackground from "@/assets/images/mobile-bg.jpg";
 import { DEFAULT_PLAYER_NAMES, type PlayerSlot, type Team } from "@/lib/deck";
-import { DEFAULT_PREFERENCES, readPreferences, writePreferences, type GamePreferences } from "@/lib/preferences";
+import { DEFAULT_PREFERENCES, isSfxMuted, readPreferences, writePreferences, type GamePreferences } from "@/lib/preferences";
 import { playGameSound, type GameSound } from "@/lib/sound";
 import {
   type GameSnapshot,
@@ -175,8 +175,8 @@ export function JackpotApp() {
   };
 
   const playCue = useCallback((sound: GameSound) => {
-    if (preferences.soundEnabled && preferences.soundEffects) playGameSound(sound, preferences.soundVolume);
-  }, [preferences]);
+    if (!isSfxMuted()) playGameSound(sound, preferences.soundVolume || 0.65);
+  }, [preferences.soundVolume]);
 
   const showTableToast = useCallback((kind: TableToastKind, title: string, message: string) => {
     if (kind === "success") playCue("success");
@@ -1206,6 +1206,7 @@ export function JackpotApp() {
   const onSignal = () => {
     setSignalMenuOpen(false);
     if (room?.gameAuthoritative) {
+      playCue("signal");
       void requestServerGameAction("signal");
     } else if (game) {
       const actor = game.players.find((player) => player.id === viewerPlayerId);
@@ -1233,6 +1234,7 @@ export function JackpotApp() {
     if (!game || busy) return;
     setSignalMenuOpen(false);
     if (room?.gameAuthoritative) {
+      playCue("signal");
       void requestServerGameAction("fake-signal");
     } else {
       const actual = selectedSignal;
@@ -1253,6 +1255,7 @@ export function JackpotApp() {
     setReactionMenuOpen(false);
     if (!game || busy) return;
     if (room?.gameAuthoritative) {
+      playCue("reaction");
       void requestServerGameAction("reaction", undefined, reactionId);
       return;
     }
@@ -2776,7 +2779,7 @@ export function JackpotApp() {
 
                       {/* Category Filter Chips */}
                       <div className="signal-filter-chips">
-                        {(["All", "Gesture", "Facial", "Subtle", "Audio"] as const).map((cat) => (
+                        {(["All", "Gesture", "Facial", "Subtle"] as const).map((cat) => (
                           <button
                             type="button"
                             key={cat}
@@ -2798,6 +2801,7 @@ export function JackpotApp() {
                               key={signal.id}
                               className={`secret-signal-card ${isSelected ? "selected" : ""}`}
                               onClick={() => {
+                                playCue("card_click");
                                 setSelectedSignal(signal.id);
                                 if (!localSignalConfirmed) {
                                   void updateTeamPrivate({ signal: signal.id });
@@ -3071,7 +3075,10 @@ export function JackpotApp() {
                       peek={false}
                       selectedCardId={selectedCardId}
                       canSelect={isYourPass && !busy}
-                      onSelectCard={setSelectedCardId}
+                      onSelectCard={(id) => {
+                        playCue("card_click");
+                        setSelectedCardId((prev) => (prev === id ? null : id));
+                      }}
                       reaction={reactionBursts.filter((entry) => entry.playerId === player.id).at(-1)}
                       hasFourOfAKind={player.id === viewerPlayerId && Boolean(yourFour)}
                       activeSignal={playerSignal}

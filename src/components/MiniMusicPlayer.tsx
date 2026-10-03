@@ -1,7 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useMusic } from "@/components/MusicProvider";
+import { isSfxMuted, setSfxMuted } from "@/lib/preferences";
+import { unlockAndPlayTestSound, unlockAudioContext } from "@/lib/sound";
 
 export function MiniMusicPlayer() {
   const {
@@ -15,6 +17,30 @@ export function MiniMusicPlayer() {
 
   const activePlaying = soundOn && isPlaying;
   const [showTooltip, setShowTooltip] = useState(false);
+  const [sfxMuted, setSfxMutedState] = useState(false);
+
+  useEffect(() => {
+    setSfxMutedState(isSfxMuted());
+    const handleSfxChange = (e: Event) => {
+      const custom = e as CustomEvent<{ muted: boolean }>;
+      setSfxMutedState(custom.detail?.muted ?? isSfxMuted());
+    };
+    window.addEventListener("jackpot:sfx-change", handleSfxChange);
+    return () => window.removeEventListener("jackpot:sfx-change", handleSfxChange);
+  }, []);
+
+  const handleToggleSfx = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextMuted = !sfxMuted;
+    setSfxMutedState(nextMuted);
+    setSfxMuted(nextMuted);
+    if (!nextMuted) {
+      // Immediately unlock Web Audio and play test chime to confirm activation
+      unlockAndPlayTestSound();
+    } else {
+      unlockAudioContext();
+    }
+  };
 
   return (
     <div
@@ -27,8 +53,8 @@ export function MiniMusicPlayer() {
         type="button"
         className={`theme-player-disc ${activePlaying ? "spinning" : ""}`}
         onClick={toggleSound}
-        title={activePlaying ? "Pause music" : "Play music"}
-        aria-label={activePlaying ? "Pause music" : "Play music"}
+        title={activePlaying ? "Pause background music" : "Play background music"}
+        aria-label={activePlaying ? "Pause background music" : "Play background music"}
       >
         <span className="disc-ring ring-outer" />
         <span className="disc-ring ring-inner" />
@@ -87,12 +113,23 @@ export function MiniMusicPlayer() {
             <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
           </svg>
         </button>
+
+        {/* SFX Toggle Button */}
+        <button
+          type="button"
+          className={`theme-player-btn sfx-btn ${sfxMuted ? "sfx-muted" : "sfx-active"}`}
+          onClick={handleToggleSfx}
+          title={sfxMuted ? "Table Sound Effects: MUTED (Click to activate & test)" : "Table Sound Effects: ON (Click to mute / test)"}
+          aria-label={sfxMuted ? "Activate sound effects" : "Mute sound effects"}
+        >
+          <span style={{ fontSize: "11px", display: "inline-flex" }}>{sfxMuted ? "🔇" : "🔊"}</span>
+        </button>
       </div>
 
       {/* Floating Track Tooltip on hover */}
       {showTooltip && (
         <div className="theme-player-tooltip" role="tooltip">
-          <span>{trackMeta.artist} — {trackMeta.title}</span>
+          <span>{trackMeta.artist} — {trackMeta.title} · SFX: {sfxMuted ? "Off" : "On"}</span>
         </div>
       )}
     </div>

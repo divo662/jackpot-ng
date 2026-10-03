@@ -74,7 +74,7 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
   const unlocked = useRef(false);
   const [soundOn, setSoundOn] = useState(() => {
     const prefs = readPreferences();
-    return prefs.soundEnabled && prefs.soundEffects;
+    return prefs.soundEnabled;
   });
   const [volume, setVolumeState] = useState(() => readPreferences().soundVolume);
   const [trackIndex, setTrackIndex] = useState(0);
@@ -139,7 +139,7 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
     setSoundOn((current) => {
       const next = !current;
       const prefs = readPreferences();
-      writePreferences({ ...prefs, soundEnabled: next, soundEffects: next });
+      writePreferences({ ...prefs, soundEnabled: next });
       const audio = audioRef.current;
       if (audio) {
         if (next) {

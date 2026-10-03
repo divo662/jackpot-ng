@@ -406,6 +406,23 @@ button {
   box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);
 }
 
+.theme-player-btn.sfx-btn {
+  font-size: 11px;
+}
+
+.theme-player-btn.sfx-btn.sfx-active {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.16);
+  color: #fef08a;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25);
+}
+
+.theme-player-btn.sfx-btn.sfx-muted {
+  opacity: 0.5;
+  filter: grayscale(1);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
 /* Tooltip */
 .theme-player-tooltip {
   position: absolute;
@@ -7094,7 +7111,8 @@ button {
     height: 28px !important;
   }
 
-  .table-topbar-right .theme-player-btn.play-btn {
+  .table-topbar-right .theme-player-btn.play-btn,
+  .table-topbar-right .theme-player-btn.sfx-btn {
     width: 28px !important;
     height: 28px !important;
     border-radius: 50% !important;
