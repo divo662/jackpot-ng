@@ -34,6 +34,14 @@ export type SharedRoom = {
   round?: number;
   result?: RoundResult | null;
   gameAuthoritative?: boolean;
+  matchInterruption?: {
+    type: "deliberate_exit" | "disconnected" | "aborted";
+    playerId: string;
+    playerName: string;
+    message: string;
+    deadline?: number;
+    createdAt: number;
+  } | null;
   playerTokens?: Record<string, string>;
   tokenClaims?: Record<string, boolean>;
   playerReactionAt?: Record<string, number>;
@@ -121,36 +129,98 @@ export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
     const expired: SharedRoom = { ...room, teams: undefined, teamAcceptances: undefined, teamPhase: "assignment", teamNotice: "The 20-second team confirmation expired. The host can assign teams again.", confirmationEndsAt: undefined, updatedAt: nextUpdatedAt(room) };
     return await saveRoom(expired, room.updatedAt) ? expired : await readRoom(room.code);
   }
-  if (room?.teamPhase === "strategy" && room.strategyEndsAt && Date.now() >= room.strategyEndsAt) {
-    return await finishStrategy(room);
+  if (room && room.teamPhase === "strategy") {
+    const currentRoom = room;
+    const timeExpired = Boolean(currentRoom.strategyEndsAt && Date.now() >= currentRoom.strategyEndsAt);
+    const alphaPlayers = currentRoom.players.filter((p) => currentRoom.teams?.[p.id] === "Alpha");
+    const bravoPlayers = currentRoom.players.filter((p) => currentRoom.teams?.[p.id] === "Bravo");
+    const alphaLocked = alphaPlayers.length === 0 || Boolean(currentRoom.teamSignalLocked?.Alpha);
+    const bravoLocked = bravoPlayers.length === 0 || Boolean(currentRoom.teamSignalLocked?.Bravo);
+    if (timeExpired || (alphaLocked && bravoLocked)) {
+      return await finishStrategy(currentRoom);
+    }
+  }
+
+  // Active match player disconnect & 60-second grace period handling
+  if (room && (room.status === "table" || room.teamPhase === "game" || room.teamPhase === "strategy")) {
+    const now = Date.now();
+    const currentRoom = room;
+    const DISCONNECT_THRESHOLD_MS = 15_000;
+    const disconnectedPlayer = currentRoom.players.find((p) => {
+      const lastActive = p.lastSeen ?? p.joinedAt;
+      return now - lastActive > DISCONNECT_THRESHOLD_MS;
+    });
+
+    if (disconnectedPlayer) {
+      if (!currentRoom.matchInterruption) {
+        const updated: SharedRoom = {
+          ...currentRoom,
+          matchInterruption: {
+            type: "disconnected",
+            playerId: disconnectedPlayer.id,
+            playerName: disconnectedPlayer.nickname,
+            message: `${disconnectedPlayer.nickname} lost connection. Match paused for 60 seconds to allow them to reconnect.`,
+            deadline: now + 60_000,
+            createdAt: now,
+          },
+          updatedAt: nextUpdatedAt(currentRoom),
+        };
+        if (await saveRoom(updated, currentRoom.updatedAt)) room = updated;
+      } else if (currentRoom.matchInterruption.type === "disconnected" && currentRoom.matchInterruption.deadline && now >= currentRoom.matchInterruption.deadline) {
+        const updated: SharedRoom = {
+          ...currentRoom,
+          matchInterruption: {
+            type: "aborted",
+            playerId: disconnectedPlayer.id,
+            playerName: disconnectedPlayer.nickname,
+            message: `${disconnectedPlayer.nickname} failed to reconnect within 60 seconds. A 4-player match cannot continue with a missing player.`,
+            createdAt: now,
+          },
+          updatedAt: nextUpdatedAt(currentRoom),
+        };
+        if (await saveRoom(updated, currentRoom.updatedAt)) room = updated;
+      }
+    } else if (currentRoom.matchInterruption?.type === "disconnected") {
+      const updated: SharedRoom = {
+        ...currentRoom,
+        matchInterruption: null,
+        updatedAt: nextUpdatedAt(currentRoom),
+      };
+      if (await saveRoom(updated, currentRoom.updatedAt)) room = updated;
+    }
   }
   if (room?.status === "lobby") {
     const now = Date.now();
+    // Only clean up a room if it has been completely abandoned for over 2 hours
+    const ROOM_ABANDON_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+    if (now - (room.updatedAt ?? room.players[0]?.joinedAt ?? 0) > ROOM_ABANDON_TIMEOUT_MS) {
+      await deleteSharedRoom(room.code);
+      return null;
+    }
+
+    // Guest disconnect pruning: only remove non-host guests after 5 minutes of no heartbeat.
+    // The host is always kept and the room is NEVER deleted during the lobby waiting phase!
+    const GUEST_DISCONNECT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    const currentHostId = room.hostPlayerId;
     const activePlayers = room.players.filter((player) => {
+      if (player.id === currentHostId) return true; // Host seat is always preserved
       const lastActive = player.lastSeen ?? player.joinedAt;
-      return now - lastActive < 25_000;
+      return now - lastActive < GUEST_DISCONNECT_TIMEOUT_MS;
     });
+
     if (activePlayers.length < room.players.length) {
       const removed = room.players.filter((p) => !activePlayers.some((a) => a.id === p.id));
-      if (activePlayers.length === 0) {
-        await deleteSharedRoom(room.code);
-        return null;
-      }
       const previous = room;
-      const nextHost = activePlayers.some((p) => p.id === room!.hostPlayerId)
-        ? room.hostPlayerId
-        : activePlayers[0].id;
       room = {
         ...room,
-        hostPlayerId: nextHost,
-        players: activePlayers.map((p) => ({ ...p, isAdmin: p.id === nextHost })),
+        players: activePlayers,
         chat: [
           ...room.chat,
           ...removed.map((p) => ({
             id: `message-${crypto.randomUUID()}`,
             playerId: p.id,
             nickname: p.nickname,
-            text: `${p.nickname} left the room (disconnected).`,
+            text: `${p.nickname} left the room.`,
             createdAt: now,
             system: true,
           })),
@@ -311,7 +381,7 @@ export async function touchSharedPlayerPresence(code: string, playerId: string):
   await saveRoom(updated, room.updatedAt);
 }
 
-export async function removeSharedPlayer(code: string, playerId: string): Promise<{ success: boolean; error?: string }> {
+export async function removeSharedPlayer(code: string, playerId: string, isDeliberate = true): Promise<{ success: boolean; error?: string }> {
   const cleanCode = code.trim().toUpperCase();
   const room = await getSharedRoom(cleanCode);
   if (!room) return { success: false, error: "Room not found." };
@@ -335,6 +405,23 @@ export async function removeSharedPlayer(code: string, playerId: string): Promis
   const nextAcceptances = room.teamAcceptances ? { ...room.teamAcceptances } : undefined;
   if (nextAcceptances) delete nextAcceptances[playerId];
 
+  const isMatchActive = room.status === "table" || room.teamPhase === "game" || room.teamPhase === "strategy";
+  const incompletePlayers = remaining.length < 4;
+
+  let matchInterruption = room.matchInterruption;
+  if (isMatchActive && incompletePlayers) {
+    matchInterruption = {
+      type: isDeliberate ? "deliberate_exit" : "disconnected",
+      playerId: player.id,
+      playerName: player.nickname,
+      message: isDeliberate
+        ? `${player.nickname} ended their session and left the match. Jackpot requires 4 active players (2 vs 2) and cannot continue with a missing player.`
+        : `${player.nickname} lost connection. Match paused for 60 seconds to allow them to reconnect.`,
+      deadline: isDeliberate ? undefined : now + 60_000,
+      createdAt: now,
+    };
+  }
+
   const updated: SharedRoom = {
     ...room,
     hostPlayerId: nextHost,
@@ -344,6 +431,7 @@ export async function removeSharedPlayer(code: string, playerId: string): Promis
     teamPhase: (room.teamPhase === "assignment" || room.teamPhase === "confirmation") && remaining.length < 4
       ? "lobby"
       : room.teamPhase,
+    matchInterruption,
     chat: [
       ...room.chat,
       {
@@ -360,6 +448,46 @@ export async function removeSharedPlayer(code: string, playerId: string): Promis
 
   const saved = await saveRoom(updated, room.updatedAt);
   return { success: saved };
+}
+
+export async function returnSharedRoomToLobby(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
+  const cleanCode = code.trim().toUpperCase();
+  const room = await getSharedRoom(cleanCode);
+  if (!room) return { error: "Room not found." };
+  const player = room.players.find((p) => p.id === requesterId);
+  if (!player) return { error: "Your player seat is not in this room." };
+  const now = Date.now();
+  const updated: SharedRoom = {
+    ...room,
+    status: "lobby",
+    teamPhase: "lobby",
+    gameSnapshot: null,
+    teams: undefined,
+    teamAcceptances: undefined,
+    teamNotice: undefined,
+    teamSignals: undefined,
+    teamSignalLocked: undefined,
+    teamSignalAgreements: undefined,
+    teamSignalBy: undefined,
+    confirmationEndsAt: undefined,
+    strategyEndsAt: undefined,
+    matchInterruption: null,
+    chat: [
+      ...room.chat,
+      {
+        id: `message-${crypto.randomUUID()}`,
+        playerId: requesterId,
+        nickname: player.nickname,
+        text: `Match ended. Returned to lobby.`,
+        createdAt: now,
+        system: true,
+      },
+    ].slice(-100),
+    updatedAt: nextUpdatedAt(room),
+  };
+  const saved = await saveRoom(updated, room.updatedAt);
+  if (!saved) return { error: "Could not update room state." };
+  return { room: updated };
 }
 
 /** Update the guest's display name in the current shared room. */
@@ -484,20 +612,43 @@ export async function respondToTeamAssignment(code: string, playerId: string, ac
   return { room: next };
 }
 
-export async function getPrivateTeamRoom(code: string, playerId: string): Promise<{ team?: "Alpha" | "Bravo"; signal?: string; selectedBy?: string; agreements?: Record<string, boolean>; locked?: boolean; teammates?: Array<Pick<LocalPlayer, "id" | "nickname">>; chat?: LocalChatMessage[]; endsAt?: number; error?: string }> {
+export async function getPrivateTeamRoom(code: string, playerId: string): Promise<{
+  team?: "Alpha" | "Bravo";
+  signal?: string;
+  selectedBy?: string;
+  agreements?: Record<string, boolean>;
+  locked?: boolean;
+  otherTeamLocked?: boolean;
+  allTeamsLocked?: boolean;
+  teammates?: Array<Pick<LocalPlayer, "id" | "nickname">>;
+  chat?: LocalChatMessage[];
+  endsAt?: number;
+  phase?: SharedRoom["teamPhase"];
+  status?: SharedRoom["status"];
+  error?: string;
+}> {
   const room = await getSharedRoom(code);
   if (!room) return { error: "This room is no longer available." };
   const team = room.teams?.[playerId];
   if (!team) return { error: "Your seat is not part of this team room." };
+  const otherTeam: "Alpha" | "Bravo" = team === "Alpha" ? "Bravo" : "Alpha";
+  const locked = Boolean(room.teamSignalLocked?.[team]);
+  const otherPlayers = room.players.filter((player) => room.teams?.[player.id] === otherTeam);
+  const otherTeamLocked = otherPlayers.length === 0 || Boolean(room.teamSignalLocked?.[otherTeam]);
+  const allTeamsLocked = locked && otherTeamLocked;
   return {
     team,
     signal: room.teamSignals?.[team],
     selectedBy: room.teamSignalBy?.[team],
     agreements: room.teamSignalAgreements?.[team] ?? {},
-    locked: room.teamSignalLocked?.[team] ?? false,
+    locked,
+    otherTeamLocked,
+    allTeamsLocked,
     teammates: room.players.filter((player) => room.teams?.[player.id] === team).map(({ id, nickname }) => ({ id, nickname })),
     chat: room.teamChats?.[team] ?? [],
     endsAt: room.strategyEndsAt,
+    phase: room.teamPhase,
+    status: room.status,
   };
 }
 
@@ -526,7 +677,16 @@ export async function updatePrivateTeamRoom(code: string, playerId: string, inpu
     const agreements = { ...(room.teamSignalAgreements?.[team] ?? {}), [playerId]: true };
     next.teamSignalAgreements = { ...room.teamSignalAgreements, [team]: agreements };
     const teammates = room.players.filter((player) => room.teams?.[player.id] === team);
-    if (teammates.every((player) => agreements[player.id])) next.teamSignalLocked = { ...room.teamSignalLocked, [team]: true };
+    if (teammates.every((player) => agreements[player.id])) {
+      next.teamSignalLocked = { ...room.teamSignalLocked, [team]: true };
+      const otherTeam: "Alpha" | "Bravo" = team === "Alpha" ? "Bravo" : "Alpha";
+      const otherPlayers = room.players.filter((player) => room.teams?.[player.id] === otherTeam);
+      const otherTeamIsReady = otherPlayers.length === 0 || Boolean(next.teamSignalLocked?.[otherTeam]);
+      if (otherTeamIsReady) {
+        await finishStrategy(next);
+        return {};
+      }
+    }
   }
   if (input.text !== undefined) {
     if (typeof input.text !== "string" || !input.text.trim()) return { error: "Write a team message first." };
@@ -685,21 +845,35 @@ export async function startNextSharedRound(code: string, requesterId: string): P
   if (!room) return { error: "This room is no longer available." };
   if (room.hostPlayerId !== requesterId) return { error: "Only the room host can start the next round." };
   const now = nextUpdatedAt(room);
+  const nextRoundNumber = (room.round ?? 1) + 1;
   const next: SharedRoom = {
     ...room,
-    status: "table",
-    teamPhase: "game",
-    gameSnapshot: createRoomMatch(room.players.map((player) => ({
-      id: player.id,
-      name: player.nickname,
-      team: room.teams?.[player.id] ?? "Alpha",
-    }))),
-    dealVersion: (room.dealVersion ?? 5) + 1,
+    status: "strategy",
+    teamPhase: "strategy",
+    strategyEndsAt: now + 60_000,
+    teamSignals: {},
+    teamSignalBy: {},
+    teamSignalAgreements: {},
+    teamSignalLocked: {},
+    teamChats: { Alpha: [], Bravo: [] },
+    gameSnapshot: null,
     scores: room.scores ?? emptyScores(),
     suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
-    round: (room.round ?? 1) + 1,
+    round: nextRoundNumber,
     result: null,
     pendingSignalTruth: undefined,
+    matchInterruption: null,
+    chat: [
+      ...room.chat,
+      {
+        id: `message-${crypto.randomUUID()}`,
+        playerId: requesterId,
+        nickname: "System",
+        text: `Round ${nextRoundNumber} initiated! Teams have 60 seconds in their private room to choose or change secret signals.`,
+        createdAt: now,
+        system: true,
+      },
+    ].slice(-100),
     updatedAt: now,
   };
   if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
@@ -713,33 +887,6 @@ export async function rematchSharedMatch(code: string, requesterId: string): Pro
   const now = nextUpdatedAt(room);
   const next: SharedRoom = {
     ...room,
-    status: "table",
-    teamPhase: "game",
-    gameSnapshot: createRoomMatch(room.players.map((player) => ({
-      id: player.id,
-      name: player.nickname,
-      team: room.teams?.[player.id] ?? "Alpha",
-    }))),
-    dealVersion: (room.dealVersion ?? 5) + 1,
-    scores: emptyScores(),
-    suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
-    round: 1,
-    result: null,
-    pendingSignalTruth: undefined,
-    updatedAt: now,
-  };
-  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-  return { room: next };
-}
-
-export async function restartSharedMatch(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
-  const room = await getSharedRoom(code);
-  if (!room) return { error: "This room is no longer available." };
-  if (room.hostPlayerId !== requesterId) return { error: "Only the room host can restart the match." };
-  if (room.status !== "result") return { error: "Restart is available after a round result." };
-  const now = nextUpdatedAt(room);
-  const next: SharedRoom = {
-    ...room,
     status: "strategy",
     teamPhase: "strategy",
     strategyEndsAt: now + 60_000,
@@ -749,14 +896,32 @@ export async function restartSharedMatch(code: string, requesterId: string): Pro
     teamSignalLocked: {},
     teamChats: { Alpha: [], Bravo: [] },
     gameSnapshot: null,
+    dealVersion: (room.dealVersion ?? 5) + 1,
     scores: emptyScores(),
     suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
-    round: (room.round ?? 1) + 1,
+    round: 1,
     result: null,
+    pendingSignalTruth: undefined,
+    matchInterruption: null,
+    chat: [
+      ...room.chat,
+      {
+        id: `message-${crypto.randomUUID()}`,
+        playerId: requesterId,
+        nickname: "System",
+        text: `New match started! Teams have 60 seconds in their private room to choose secret signals for Round 1.`,
+        createdAt: now,
+        system: true,
+      },
+    ].slice(-100),
     updatedAt: now,
   };
   if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
   return { room: next };
+}
+
+export async function restartSharedMatch(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
+  return startNextSharedRound(code, requesterId);
 }
 
 function hiddenCard(ownerId: string, index: number): JackpotCard {

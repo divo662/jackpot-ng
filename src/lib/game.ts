@@ -301,15 +301,20 @@ export function resolveJackpot(
     };
   }
 
+  // False Jackpot: caller's team does NOT hold four-of-a-kind.
+  // In competitive Kemps/Jackpot rules, a false call awards a point to the opposing team!
+  const opposingTeams = Array.from(new Set(state.players.map((p) => p.team).filter((t) => t !== caller.team)));
+  const penaltyScoringTeam = opposingTeams.length > 0 ? opposingTeams[0] : null;
+
   return {
     kind: "jackpot",
     valid: false,
     callingTeam: caller.team,
     callingPlayerId,
-    scoringTeam: null,
+    scoringTeam: penaltyScoringTeam,
     suit: null,
-    title: "False JACKPOT",
-    detail: `${caller.name} called JACKPOT, but Team ${caller.team} has no four-of-a-kind. No point.`,
+    title: "False JACKPOT!",
+    detail: `${caller.name} called JACKPOT, but Team ${caller.team} has no four-of-a-kind.${penaltyScoringTeam ? ` +1 Point to Team ${penaltyScoringTeam}!` : ""}`,
   };
 }
 

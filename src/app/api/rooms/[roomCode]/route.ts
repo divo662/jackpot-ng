@@ -7,6 +7,7 @@ import {
   removeSharedPlayer,
   renameSharedPlayer,
   respondToTeamAssignment,
+  returnSharedRoomToLobby,
   touchSharedPlayerPresence,
 } from "@/lib/shared-rooms";
 import { normalizePlayerName, type LocalPlayer } from "@/lib/session";
@@ -37,7 +38,7 @@ export async function POST(request: Request, { params }: RouteContext) {
   }
 
   if (body.action === "leave" && typeof body.playerId === "string") {
-    await removeSharedPlayer(roomCode, body.playerId);
+    await removeSharedPlayer(roomCode, body.playerId, true);
     return Response.json({ ok: true });
   }
 
@@ -68,8 +69,13 @@ export async function PATCH(request: Request, { params }: RouteContext) {
   try { body = await request.json(); } catch { return Response.json({ error: "That room action was not valid." }, { status: 400 }); }
   if (typeof body.playerId !== "string") return Response.json({ error: "Your player session is missing." }, { status: 400 });
   if (body.action === "leave") {
-    await removeSharedPlayer(roomCode, body.playerId);
+    await removeSharedPlayer(roomCode, body.playerId, true);
     return Response.json({ ok: true });
+  }
+  if (body.action === "return-to-lobby") {
+    const result = await returnSharedRoomToLobby(roomCode, body.playerId);
+    if (!result.room) return Response.json({ error: result.error }, { status: 403 });
+    return Response.json({ room: await getSharedRoomView(roomCode, body.playerId, readRoomSessionToken(request, roomCode)) });
   }
   if (!await isSharedPlayerAuthenticated(roomCode, body.playerId, readRoomSessionToken(request, roomCode))) return Response.json({ error: "Reconnect to this room before changing teams." }, { status: 401 });
   if (body.action === "rename" && typeof body.nickname === "string") {
@@ -90,7 +96,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
 
 export async function DELETE(request: Request, { params }: RouteContext) {
   const { roomCode } = await params;
-  let playerId = new URL(request.url).searchParams.get("playerId") ?? "";
+  const url = new URL(request.url);
+  let playerId = url.searchParams.get("playerId") ?? "";
+  const deliberate = url.searchParams.get("deliberate") !== "false";
   if (!playerId) {
     try {
       const body = await request.json() as { playerId?: string };
@@ -100,6 +108,6 @@ export async function DELETE(request: Request, { params }: RouteContext) {
     }
   }
   if (!playerId) return Response.json({ error: "Your player session is missing." }, { status: 400 });
-  await removeSharedPlayer(roomCode, playerId);
+  await removeSharedPlayer(roomCode, playerId, deliberate);
   return Response.json({ ok: true });
 }

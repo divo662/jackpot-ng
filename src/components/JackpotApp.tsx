@@ -116,6 +116,8 @@ export function JackpotApp() {
   const [teamChatDraft, setTeamChatDraft] = useState("");
   const [teamSignalAgreements, setTeamSignalAgreements] = useState<Record<string, boolean>>({});
   const [teamSignalLocked, setTeamSignalLocked] = useState(false);
+  const [otherTeamLocked, setOtherTeamLocked] = useState(false);
+  const [allTeamsLocked, setAllTeamsLocked] = useState(false);
   const [teamMates, setTeamMates] = useState<Array<{ id: string; nickname: string }>>([]);
 
   const [signalFlash, setSignalFlash] = useState(false);
@@ -155,6 +157,10 @@ export function JackpotApp() {
   const [jackpotModalOpen, setJackpotModalOpen] = useState(false);
   const [jackpotCelebrating, setJackpotCelebrating] = useState(false);
   const [roundTransitionOpen, setRoundTransitionOpen] = useState(false);
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
+  const [matchInterruption, setMatchInterruption] = useState<LocalRoom["matchInterruption"]>(null);
+  const [autoReturnCountdown, setAutoReturnCountdown] = useState<number | null>(null);
+  const [reconnectCountdown, setReconnectCountdown] = useState<number>(60);
   const [matchWonTeam, setMatchWonTeam] = useState<Team | null>(null);
   const [matchStats, setMatchStats] = useState({
     roundsPlayed: 1,
@@ -418,7 +424,7 @@ export function JackpotApp() {
           return;
         }
         if (!response.ok) return;
-        const payload = await response.json() as { room?: { id: string; code: string; isPrivate: boolean; maxPlayers: 4 | 6 | 8; status: LocalRoom["status"]; hostPlayerId: string; players: LocalRoom["players"]; chat: LocalRoom["chat"]; teams?: LocalRoom["teams"]; teamAcceptances?: LocalRoom["teamAcceptances"]; teamNotice?: string; teamPhase?: LocalRoom["teamPhase"]; confirmationEndsAt?: number; strategyEndsAt?: number; gameSnapshot?: GameSnapshot | null; scores?: ScoreBoard; suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"]; round?: number; result?: RoundResult | null; gameAuthoritative?: boolean; updatedAt: number } };
+        const payload = await response.json() as { room?: { id: string; code: string; isPrivate: boolean; maxPlayers: 4 | 6 | 8; status: LocalRoom["status"]; hostPlayerId: string; players: LocalRoom["players"]; chat: LocalRoom["chat"]; teams?: LocalRoom["teams"]; teamAcceptances?: LocalRoom["teamAcceptances"]; teamNotice?: string; teamPhase?: LocalRoom["teamPhase"]; confirmationEndsAt?: number; strategyEndsAt?: number; gameSnapshot?: GameSnapshot | null; scores?: ScoreBoard; suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"]; round?: number; result?: RoundResult | null; gameAuthoritative?: boolean; matchInterruption?: LocalRoom["matchInterruption"]; updatedAt: number } };
         const shared = payload.room;
         if (!active || !shared || shared.updatedAt <= sharedRoomRevision.current) return;
         sharedRoomRevision.current = shared.updatedAt;
@@ -444,10 +450,14 @@ export function JackpotApp() {
           suspectAttemptsRemaining: shared.suspectAttemptsRemaining ?? cached?.suspectAttemptsRemaining,
           round: shared.round ?? cached?.round ?? 1,
           result: shared.result ?? cached?.result ?? null,
+          matchInterruption: shared.matchInterruption,
           updatedAt: shared.updatedAt,
         };
         saveRoom(syncedRoom);
         setRoom(syncedRoom);
+        if (shared.matchInterruption !== undefined) {
+          setMatchInterruption(shared.matchInterruption ?? null);
+        }
         if (shared.gameSnapshot !== undefined) {
           const snapshot = shared.gameSnapshot;
           const passEvents = snapshot?.passEvents ?? (snapshot?.lastPassEvent ? [snapshot.lastPassEvent] : []);
@@ -476,7 +486,11 @@ export function JackpotApp() {
           }
           setGame(snapshot);
         }
-        if (shared.scores) setScores(shared.scores);
+        if (shared.scores) {
+          setScores(shared.scores);
+          const winningTeam = (["Alpha", "Bravo"] as const).find((t) => (shared.scores?.[t] ?? 0) >= WINNING_SCORE);
+          setMatchWonTeam(winningTeam ?? null);
+        }
         if (shared.round !== undefined) setRound(shared.round);
         if (shared.result !== undefined) {
           setResult(shared.result);
@@ -485,10 +499,16 @@ export function JackpotApp() {
           }
         }
         if (pathname.startsWith("/room/")) {
-          if (shared.teamPhase === "strategy" && !pathname.endsWith("/signal")) {
+          if (shared.status === "lobby" && (pathname.endsWith("/table") || pathname.endsWith("/signal") || pathname.endsWith("/result"))) {
+            router.replace(`/room/${encodeURIComponent(roomCode)}`);
+          } else if (shared.teamPhase === "strategy" && !pathname.endsWith("/signal")) {
             router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
           } else if (shared.teamPhase === "game" && !pathname.endsWith("/table")) {
-            router.replace(`/room/${encodeURIComponent(roomCode)}/table`);
+            if (screen === "signal" && tableLaunchCountdown !== null) {
+              // Allow the 3... 2... 1... countdown animation to complete smoothly before navigating
+            } else {
+              router.replace(`/room/${encodeURIComponent(roomCode)}/table`);
+            }
           } else if (shared.status === "result" && !pathname.endsWith("/result")) {
             router.replace(`/room/${encodeURIComponent(roomCode)}/result`);
           } else if (shared.teamPhase === "strategy" && pathname.endsWith("/result")) {
@@ -513,7 +533,8 @@ export function JackpotApp() {
 
   useEffect(() => {
     if (!hydrated || !session) return;
-    const nextSession = { ...session, nickname, roomCode: roomCode || session.roomCode, updatedAt: Date.now() };
+    const activeRoomCode = pathname.startsWith("/room/") ? (roomCode || session.roomCode) : "";
+    const nextSession = { ...session, nickname, roomCode: activeRoomCode, updatedAt: Date.now() };
     writeSession(nextSession);
     window.localStorage.setItem("jackpot:signal:v1", selectedSignal);
     const currentRoom = nextSession.roomCode ? findRoom(nextSession.roomCode) : null;
@@ -521,7 +542,7 @@ export function JackpotApp() {
     if (currentRoom && member && member.nickname !== nickname) {
       updateRoomForPlayer(currentRoom, nextSession.playerId, nickname);
     }
-  }, [hydrated, nickname, roomCode, selectedSignal, session]);
+  }, [hydrated, nickname, roomCode, selectedSignal, session, pathname]);
 
   const selectedSignalMeta = getSignalMeta(selectedSignal);
   const currentTeamDraft = Object.keys(teamDraft).length ? teamDraft : room?.teams ?? {};
@@ -622,12 +643,53 @@ export function JackpotApp() {
     }
   }, [teamChat.length, screen]);
 
+  const canLaunchTable = room?.gameAuthoritative
+    ? (allTeamsLocked || room?.teamPhase === "game" || room?.status === "table")
+    : (allTeamsLocked || teamSignalLocked);
+
   useEffect(() => {
-    if (screen === "signal" && teamSignalLocked && tableLaunchCountdown === null) {
+    if (screen === "signal" && canLaunchTable && tableLaunchCountdown === null) {
       const timer = window.setTimeout(() => setTableLaunchCountdown(3), 0);
       return () => window.clearTimeout(timer);
     }
-  }, [screen, teamSignalLocked, tableLaunchCountdown]);
+  }, [screen, canLaunchTable, tableLaunchCountdown]);
+
+  useEffect(() => {
+    if (screen !== "signal") {
+      setLocalSignalConfirmed(false);
+      setTableLaunchCountdown(null);
+      setTeamSignalLocked(false);
+      setOtherTeamLocked(false);
+      setAllTeamsLocked(false);
+    }
+  }, [screen]);
+
+  useEffect(() => {
+    if (screen !== "signal") return;
+    if (room?.strategyEndsAt) {
+      const updateClock = () => {
+        setStrategySeconds(Math.max(0, Math.ceil((room.strategyEndsAt! - Date.now()) / 1000)));
+      };
+      updateClock();
+      const timer = window.setInterval(updateClock, 500);
+      return () => window.clearInterval(timer);
+    } else {
+      const timer = window.setInterval(() => {
+        setStrategySeconds((prev) => Math.max(0, prev - 1));
+      }, 1000);
+      return () => window.clearInterval(timer);
+    }
+  }, [screen, room?.strategyEndsAt]);
+
+  useEffect(() => {
+    if (screen === "signal" && strategySeconds === 0 && tableLaunchCountdown === null) {
+      if (!room?.gameAuthoritative) {
+        beginRound(round);
+      } else {
+        navigate("table");
+      }
+    }
+  }, [screen, strategySeconds, tableLaunchCountdown, navigate, room?.gameAuthoritative, round]);
 
   useEffect(() => {
     if (tableLaunchCountdown === null) return;
@@ -639,11 +701,15 @@ export function JackpotApp() {
     }
     if (tableLaunchCountdown === 0) {
       const timer = window.setTimeout(() => {
-        navigate("table");
+        if (!room?.gameAuthoritative) {
+          beginRound(round);
+        } else {
+          navigate("table");
+        }
       }, 800);
       return () => window.clearTimeout(timer);
     }
-  }, [tableLaunchCountdown, navigate]);
+  }, [tableLaunchCountdown, navigate, room?.gameAuthoritative, round]);
 
   const sendLobbyMessage = () => {
     const text = chatDraft.trim();
@@ -899,11 +965,27 @@ export function JackpotApp() {
     const refreshPrivateRoom = async () => {
       try {
         const response = await fetch(`/api/rooms/${encodeURIComponent(privateRoomCode)}/private?playerId=${encodeURIComponent(activePlayerId)}`, { cache: "no-store" });
-        const payload = await response.json() as { privateRoom?: { signal?: string; selectedBy?: string; agreements?: Record<string, boolean>; locked?: boolean; teammates?: Array<{ id: string; nickname: string }>; chat?: LocalRoom["chat"]; endsAt?: number } };
+        const payload = await response.json() as {
+          privateRoom?: {
+            signal?: string;
+            selectedBy?: string;
+            agreements?: Record<string, boolean>;
+            locked?: boolean;
+            otherTeamLocked?: boolean;
+            allTeamsLocked?: boolean;
+            teammates?: Array<{ id: string; nickname: string }>;
+            chat?: LocalRoom["chat"];
+            endsAt?: number;
+            phase?: LocalRoom["teamPhase"];
+            status?: LocalRoom["status"];
+          };
+        };
         if (!active || !payload.privateRoom) return;
         if (payload.privateRoom.signal && signalLibrary.some((signal) => signal.id === payload.privateRoom?.signal)) setSelectedSignal(payload.privateRoom.signal);
         setTeamSignalAgreements(payload.privateRoom.agreements ?? {});
         setTeamSignalLocked(Boolean(payload.privateRoom.locked));
+        setOtherTeamLocked(Boolean(payload.privateRoom.otherTeamLocked));
+        setAllTeamsLocked(Boolean(payload.privateRoom.allTeamsLocked));
         setTeamMates(payload.privateRoom.teammates ?? []);
         setTeamChat(payload.privateRoom.chat ?? []);
         if (payload.privateRoom.endsAt) setStrategySeconds(Math.max(0, Math.ceil((payload.privateRoom.endsAt - Date.now()) / 1000)));
@@ -937,6 +1019,7 @@ export function JackpotApp() {
     if (!room?.gameAuthoritative || teamMates.length <= 1) {
       window.setTimeout(() => {
         setTeamSignalLocked(true);
+        setAllTeamsLocked(true);
       }, 1200);
     }
   };
@@ -1110,8 +1193,7 @@ export function JackpotApp() {
           setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
           const opponents = game.players.filter((p) => p.team !== you?.team).map((p) => p.id);
           triggerTableAutoReaction(opponents, "laugh");
-          setStatus("FALSE JACKPOT — Your team has no four-of-a-kind.");
-          showTableToast("error", "False Jackpot", "Your team does not hold four of a kind!");
+          finishRound(outcome);
         }
         window.setTimeout(() => setJackpotCelebrating(false), 800);
       }
@@ -1180,7 +1262,8 @@ export function JackpotApp() {
       await requestServerGameAction("next-round");
     } else {
       setRound((r) => r + 1);
-      beginRound(round + 1);
+      setStrategySeconds(60);
+      navigate("signal");
     }
   };
 
@@ -1194,7 +1277,8 @@ export function JackpotApp() {
     if (room?.gameAuthoritative) {
       await requestServerGameAction("rematch");
     } else {
-      beginRound(1);
+      setStrategySeconds(60);
+      navigate("signal");
     }
   };
 
@@ -1209,12 +1293,64 @@ export function JackpotApp() {
       writeSession({ ...session, roomCode: "" });
     }
     if (currentCode && currentPid) {
-      void fetch(`/api/rooms/${encodeURIComponent(currentCode)}?playerId=${encodeURIComponent(currentPid)}`, {
+      void fetch(`/api/rooms/${encodeURIComponent(currentCode)}?playerId=${encodeURIComponent(currentPid)}&deliberate=true`, {
         method: "DELETE",
       }).catch(() => {});
     }
     router.push("/");
   }, [roomCode, router, session]);
+
+  const handleReturnToLobby = useCallback(async () => {
+    const code = roomCode || session?.roomCode;
+    const pid = session?.playerId;
+    if (!code || !pid) {
+      router.replace("/");
+      return;
+    }
+    try {
+      await fetch(`/api/rooms/${encodeURIComponent(code)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "return-to-lobby", playerId: pid }),
+      });
+    } catch { /* offline fallback */ }
+    setMatchInterruption(null);
+    setAutoReturnCountdown(null);
+    router.replace(`/room/${encodeURIComponent(code)}`);
+  }, [roomCode, router, session]);
+
+  useEffect(() => {
+    if (!matchInterruption) {
+      setAutoReturnCountdown(null);
+      return;
+    }
+
+    if (matchInterruption.type === "disconnected") {
+      const updateGraceClock = () => {
+        if (matchInterruption.deadline) {
+          const remaining = Math.max(0, Math.ceil((matchInterruption.deadline - Date.now()) / 1000));
+          setReconnectCountdown(remaining);
+        }
+      };
+      updateGraceClock();
+      const timer = window.setInterval(updateGraceClock, 500);
+      return () => window.clearInterval(timer);
+    }
+
+    if (matchInterruption.type === "deliberate_exit" || matchInterruption.type === "aborted") {
+      setAutoReturnCountdown((prev) => (prev === null ? 10 : prev));
+      const timer = window.setInterval(() => {
+        setAutoReturnCountdown((prev) => {
+          if (prev === null || prev <= 1) {
+            handleReturnToLobby();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => window.clearInterval(timer);
+    }
+  }, [matchInterruption, handleReturnToLobby]);
 
   // Play sound effect whenever entering the result screen
   useEffect(() => {
@@ -2375,7 +2511,7 @@ export function JackpotApp() {
             <header className="jackpot-nav">
               <div
                 className="jackpot-wordmark"
-                onClick={() => navigate("home")}
+                onClick={handleExitHome}
                 role="button"
                 tabIndex={0}
                 style={{ cursor: "pointer" }}
@@ -2635,7 +2771,7 @@ export function JackpotApp() {
             <header className="jackpot-nav">
               <div
                 className="jackpot-wordmark"
-                onClick={() => navigate("home")}
+                onClick={handleExitHome}
                 role="button"
                 tabIndex={0}
                 style={{ cursor: "pointer" }}
@@ -2690,12 +2826,15 @@ export function JackpotApp() {
                       <span className={`secret-team-badge ${viewerTeam === "Alpha" ? "alpha-badge" : "bravo-badge"}`}>
                         TEAM {viewerTeam.toUpperCase()}
                       </span>
+                      <span className="secret-round-badge">ROUND {round}</span>
                     </div>
                     <h2 className="secret-partner-headline">
-                      You and {partnerName} only
+                      {round > 1 ? `Round ${round} Secret Signal Strategy` : `You and ${partnerName} only`}
                     </h2>
                     <span className="secret-confidential-note">
-                      🔒 Encrypted channel · Opponents cannot see this room, read your chat, or view your signal
+                      {round > 1
+                        ? "🛡️ Opponents may know your previous signal! Choose a fresh signal or keep your strategy · Opponents cannot see this room"
+                        : "🔒 Encrypted channel · Opponents cannot see this room, read your chat, or view your signal"}
                     </span>
                   </div>
 
@@ -2704,6 +2843,49 @@ export function JackpotApp() {
                     <strong className="timer-clock-val">{formatStrategyClock(strategySeconds)}</strong>
                   </div>
                 </div>
+
+                {/* Match Race Standings: J-A-C-K-P-O-T Letters Tracked Across Rounds */}
+                {(scores.Alpha > 0 || scores.Bravo > 0 || round > 1) && (
+                  <div className="secret-score-strip">
+                    <div className="secret-strip-header">
+                      <div className="secret-strip-title-group">
+                        <span className="secret-strip-title">MATCH RACE TO SPELL JACKPOT</span>
+                        <span className="secret-strip-subtitle">7 Letters to Win · Standings Persist Across All Rounds</span>
+                      </div>
+                      <span className="secret-strip-round-pill">ROUND {round}</span>
+                    </div>
+                    <div className="secret-strip-teams">
+                      {(["Alpha", "Bravo"] as const).map((team) => {
+                        const count = Math.min(7, Math.max(0, scores[team] ?? 0));
+                        const isYourTeam = team === viewerTeam;
+                        return (
+                          <div key={team} className={`secret-team-track ${team.toLowerCase()}-track ${isYourTeam ? "is-your-team" : ""}`}>
+                            <div className="secret-team-meta">
+                              <span className="secret-team-disc" />
+                              <strong className="secret-team-name">
+                                TEAM {team.toUpperCase()}{isYourTeam ? " (YOU)" : ""}
+                              </strong>
+                              <span className="secret-team-score-fraction">{count}/7</span>
+                            </div>
+                            <div className="secret-letters-list" aria-label={`Team ${team} has ${count} of 7 letters`}>
+                              {JACKPOT_LETTERS.map((letter, idx) => {
+                                const earned = idx < count;
+                                return (
+                                  <span
+                                    key={letter}
+                                    className={`secret-letter-token ${earned ? "token-earned" : "token-empty"}`}
+                                  >
+                                    {letter}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* 2-Column Main Layout: Left = Strategy Chat & Live Preview; Right = Signal Chooser & Confirmation */}
                 <div className="secret-main-grid">
@@ -2872,8 +3054,13 @@ export function JackpotApp() {
                           return (
                             <>
                               <div className="confirmation-status-line">
-                                {teamSignalLocked ? (
-                                  <span className="locked-pill">🔒 SIGNAL LOCKED</span>
+                                {allTeamsLocked ? (
+                                  <span className="locked-pill">🔒 ALL TEAMS LOCKED · ENTERING TABLE</span>
+                                ) : teamSignalLocked ? (
+                                  <span className="waiting-pill locked-wait">
+                                    <span className="pulse-dot green" />
+                                    🔒 Signal Locked ✓ Waiting for other team...
+                                  </span>
                                 ) : isConfirmed ? (
                                   <span className="waiting-pill">
                                     <span className="pulse-dot green" />
@@ -2888,13 +3075,17 @@ export function JackpotApp() {
 
                               <button
                                 type="button"
-                                className={`game-primary-btn confirm-signal-btn ${isConfirmed ? "confirmed" : ""}`}
-                                disabled={isConfirmed || tableLaunchCountdown !== null || strategySeconds === 0}
+                                className={`game-primary-btn confirm-signal-btn ${isConfirmed || teamSignalLocked ? "confirmed" : ""}`}
+                                disabled={isConfirmed || teamSignalLocked || tableLaunchCountdown !== null || strategySeconds === 0}
                                 onClick={confirmSecretSignal}
                               >
-                                {isConfirmed
-                                  ? "Signal selected ✓"
-                                  : `CONFIRM SIGNAL: ${selectedSignalMeta.label.toUpperCase()} ✓`}
+                                {allTeamsLocked
+                                  ? "All Teams Ready! ✓"
+                                  : teamSignalLocked
+                                    ? "Waiting for other team..."
+                                    : isConfirmed
+                                      ? "Signal selected ✓"
+                                      : `CONFIRM SIGNAL: ${selectedSignalMeta.label.toUpperCase()} ✓`}
                               </button>
                             </>
                           );
@@ -2910,8 +3101,8 @@ export function JackpotApp() {
                     <div className="launch-box">
                       <div className="launch-pulse-ring" />
                       <span className="launch-lock-icon">🔒</span>
-                      <h2 className="launch-title">LOCKED</h2>
-                      <p className="launch-subtitle">Both players confirmed! Entering the match...</p>
+                      <h2 className="launch-title">ALL TEAMS READY!</h2>
+                      <p className="launch-subtitle">All players confirmed! Entering the match...</p>
                       <div className="launch-countdown-circle">
                         <span className="launch-number">
                           {tableLaunchCountdown > 0 ? tableLaunchCountdown : "TABLE!"}
@@ -2940,11 +3131,15 @@ export function JackpotApp() {
             <header className="table-topbar">
               <div className="table-topbar-row-header">
                 <div className="table-topbar-left">
-                  <button type="button" className="ghost-btn table-lobby-btn" onClick={() => navigate("lobby")}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M19 12H5M12 19l-7-7 7-7" />
-                    </svg>
-                    <span>Lobby</span>
+                  <button
+                    type="button"
+                    className="ghost-btn table-end-session-btn"
+                    onClick={() => setExitConfirmOpen(true)}
+                    title="End game session and return to main menu"
+                    aria-label="End game session"
+                  >
+                    <span className="end-session-icon" aria-hidden="true">🚪</span>
+                    <span className="end-session-label">End Session</span>
                   </button>
                   <div className="table-user-badge">
                     <span className={`viewer-dot ${you.team.toLowerCase()}`} />
@@ -3414,6 +3609,98 @@ export function JackpotApp() {
               </div>
             )}
 
+            {/* End Game Session Confirmation Modal */}
+            {exitConfirmOpen && (
+              <div
+                className="table-modal-backdrop exit-session-backdrop"
+                role="dialog"
+                aria-modal="true"
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) setExitConfirmOpen(false);
+                }}
+              >
+                <div className="table-modal-card exit-session-card">
+                  <div className="exit-session-badge">🚪</div>
+                  <span className="modal-category-tag">END GAME SESSION</span>
+                  <h3 className="exit-session-title">Leave Match &amp; Go Home?</h3>
+                  <p className="exit-session-desc">
+                    Leaving now will disconnect your player session from this room. You will return to the main menu without being redirected back into the match.
+                  </p>
+                  <div className="exit-actions-row">
+                    <button
+                      type="button"
+                      className="table-modal-btn exit-danger-btn"
+                      onClick={() => {
+                        setExitConfirmOpen(false);
+                        handleExitHome();
+                      }}
+                    >
+                      <span>🚪 End Session &amp; Exit</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="table-modal-btn cancel-btn"
+                      onClick={() => setExitConfirmOpen(false)}
+                    >
+                      Keep Playing
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Match Interruption / Disconnection Modals */}
+            {matchInterruption?.type === "disconnected" && (
+              <div className="table-modal-backdrop match-paused-backdrop" role="dialog" aria-modal="true">
+                <div className="table-modal-card match-paused-card">
+                  <div className="paused-badge">⏳</div>
+                  <span className="modal-category-tag">MATCH PAUSED</span>
+                  <h3 className="paused-title">Waiting for {matchInterruption.playerName}...</h3>
+                  <p className="paused-desc">
+                    <strong>{matchInterruption.playerName}</strong> lost connection. The match is paused for 60 seconds to allow them to reconnect.
+                  </p>
+                  <div className="reconnect-countdown-circle">
+                    <span className="reconnect-countdown-num">{reconnectCountdown}s</span>
+                  </div>
+                  <p className="paused-subtext">The table will unfreeze automatically once they reconnect.</p>
+                </div>
+              </div>
+            )}
+
+            {(matchInterruption?.type === "deliberate_exit" || matchInterruption?.type === "aborted") && (
+              <div className="table-modal-backdrop match-interrupted-backdrop" role="dialog" aria-modal="true">
+                <div className="table-modal-card match-interrupted-card">
+                  <div className="interrupted-badge">⚠️</div>
+                  <span className="modal-category-tag">MATCH INTERRUPTED</span>
+                  <h3 className="interrupted-title">
+                    {matchInterruption.type === "deliberate_exit" ? "Player Left The Match" : "Player Connection Lost"}
+                  </h3>
+                  <p className="interrupted-desc">
+                    {matchInterruption.message}
+                  </p>
+                  <div className="exit-actions-row">
+                    <button
+                      type="button"
+                      className="table-modal-btn return-lobby-btn"
+                      onClick={handleReturnToLobby}
+                    >
+                      <span>🚪 Return to Lobby</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="table-modal-btn cancel-btn"
+                      onClick={handleExitHome}
+                    >
+                      Exit to Home
+                    </button>
+                  </div>
+                  <span className="auto-return-hint">
+                    Auto-returning to room lobby in {autoReturnCountdown ?? 10}s...
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Match Victory Modal (Full J A C K P O T Spelled) */}
             {matchWonTeam && (
               <div className="table-modal-backdrop match-victory-backdrop" role="dialog" aria-modal="true">
@@ -3603,15 +3890,20 @@ export function JackpotApp() {
                       type="button"
                       className="result-primary-btn"
                       onClick={() => {
-                        if (room?.gameAuthoritative) void requestServerGameAction("restart");
-                        else {
-                          setRound((value) => value + 1);
-                          beginRound();
+                        const hasWinner = Boolean(matchWonTeam || scores.Alpha >= WINNING_SCORE || scores.Bravo >= WINNING_SCORE);
+                        if (hasWinner) {
+                          void handleRematch();
+                        } else {
+                          void handleNextRound();
                         }
                       }}
                     >
                       <span className="btn-sparkle">✦</span>
-                      <span>{room?.gameAuthoritative ? (matchWonTeam ? "Start New Match" : "Deal Next Round") : `Deal Round ${round + 1}`}</span>
+                      <span>
+                        {(matchWonTeam || scores.Alpha >= WINNING_SCORE || scores.Bravo >= WINNING_SCORE)
+                          ? "START NEW MATCH"
+                          : "START NEXT ROUND"}
+                      </span>
                       <span className="btn-arrow">➔</span>
                     </button>
                   )}
