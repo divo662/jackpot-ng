@@ -2447,6 +2447,41 @@ button {
   text-align: center;
 }
 
+.lobby-quick-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 2px 6px;
+  width: 100%;
+  scrollbar-width: none;
+}
+
+.lobby-quick-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.lobby-quick-chip {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #fde68a;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.lobby-quick-chip:hover {
+  background: rgba(245, 158, 11, 0.25);
+  border-color: #fbbf24;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
 .lobby-chat-input-bar {
   display: flex;
   gap: 8px;
@@ -2463,6 +2498,15 @@ button {
   padding: 0 12px;
   display: flex;
   align-items: center;
+}
+
+.chat-char-counter {
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.45);
+  font-family: monospace;
+  margin-left: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .chat-input-well input {

@@ -18,13 +18,18 @@ type RouteContext = { params: Promise<{ roomCode: string }> };
 
 export async function GET(request: Request, { params }: RouteContext) {
   const { roomCode } = await params;
-  const playerId = new URL(request.url).searchParams.get("playerId") ?? "";
+  const url = new URL(request.url);
+  const playerId = url.searchParams.get("playerId") ?? "";
+  const since = Number(url.searchParams.get("since") ?? "0");
   const token = readRoomSessionToken(request, roomCode);
   if (playerId) {
-    await touchSharedPlayerPresence(roomCode, playerId);
+    void touchSharedPlayerPresence(roomCode, playerId);
   }
   const room = await getSharedRoomView(roomCode, playerId, token);
   if (!room) return Response.json({ error: "Room not found. Check the link or room code." }, { status: 404 });
+  if (since > 0 && room.updatedAt <= since) {
+    return Response.json({ unmodified: true, updatedAt: room.updatedAt }, { headers: { "Cache-Control": "no-store" } });
+  }
   return Response.json({ room }, { headers: { "Cache-Control": "no-store" } });
 }
 

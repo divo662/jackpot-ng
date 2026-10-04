@@ -48,6 +48,48 @@ export type SharedRoom = {
   updatedAt: number;
 };
 
+export function normalizeRoomCode(code: string): string {
+  const clean = code.trim().toUpperCase();
+  if (clean.startsWith("JKP") && !clean.includes("-") && clean.length > 3) {
+    return `JKP-${clean.slice(3)}`;
+  }
+  return clean;
+}
+
+const HOT_ROOM_CACHE = new Map<string, { room: SharedRoom; cachedAt: number }>();
+type RoomListener = (room: SharedRoom) => void;
+const ROOM_LISTENERS = new Map<string, Set<RoomListener>>();
+
+export function subscribeToRoom(code: string, listener: RoomListener): () => void {
+  const clean = normalizeRoomCode(code);
+  let set = ROOM_LISTENERS.get(clean);
+  if (!set) {
+    set = new Set();
+    ROOM_LISTENERS.set(clean, set);
+  }
+  set.add(listener);
+  return () => {
+    set?.delete(listener);
+    if (set && set.size === 0) {
+      ROOM_LISTENERS.delete(clean);
+    }
+  };
+}
+
+export function broadcastRoomUpdate(room: SharedRoom): void {
+  const clean = normalizeRoomCode(room.code);
+  const set = ROOM_LISTENERS.get(clean);
+  if (set) {
+    for (const listener of set) {
+      try {
+        listener(room);
+      } catch {
+        // connection closed
+      }
+    }
+  }
+}
+
 const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
 let schemaReady: Promise<void> | null = null;
 
@@ -70,29 +112,48 @@ async function ensureRoomTable(): Promise<void> {
   }
 }
 
-async function readRoom(code: string): Promise<SharedRoom | null> {
+async function readRoom(code: string, forceFresh = false): Promise<SharedRoom | null> {
+  const clean = normalizeRoomCode(code);
+  if (!forceFresh) {
+    const cached = HOT_ROOM_CACHE.get(clean);
+    if (cached && Date.now() - cached.cachedAt < 5000) {
+      return cached.room;
+    }
+  }
   await ensureRoomTable();
-  const clean = code.trim().toUpperCase();
   const withHyphen = clean.startsWith("JKP") && !clean.includes("-") ? `JKP-${clean.slice(3)}` : clean;
   const withoutHyphen = clean.replace(/-/g, "");
-  const rows = await sql!`SELECT room_state FROM jackpot_rooms WHERE code = ${clean} OR code = ${withHyphen} OR REPLACE(code, '-', '') = ${withoutHyphen} LIMIT 1`;
-  return (rows[0]?.room_state as SharedRoom | undefined) ?? null;
+  const rows = await sql!`SELECT room_state FROM jackpot_rooms WHERE code = ${clean} OR code = ${withHyphen} OR code = ${withoutHyphen} LIMIT 1`;
+  const room = (rows[0]?.room_state as SharedRoom | undefined) ?? null;
+  if (room) {
+    HOT_ROOM_CACHE.set(clean, { room, cachedAt: Date.now() });
+    HOT_ROOM_CACHE.set(normalizeRoomCode(room.code), { room, cachedAt: Date.now() });
+  }
+  return room;
 }
 
 /** Insert a new room or compare-and-swap an existing version to prevent lost updates. */
 async function saveRoom(room: SharedRoom, expectedUpdatedAt?: number): Promise<boolean> {
   await ensureRoomTable();
+  const clean = normalizeRoomCode(room.code);
+  let saved = false;
   if (expectedUpdatedAt === undefined) {
     const rows = await sql!`INSERT INTO jackpot_rooms (code, room_state, updated_at)
       VALUES (${room.code}, ${JSON.stringify(room)}::jsonb, ${room.updatedAt})
       ON CONFLICT (code) DO NOTHING RETURNING code`;
-    return rows.length === 1;
+    saved = rows.length === 1;
+  } else {
+    const rows = await sql!`UPDATE jackpot_rooms
+      SET room_state = ${JSON.stringify(room)}::jsonb, updated_at = ${room.updatedAt}
+      WHERE code = ${room.code} AND updated_at = ${expectedUpdatedAt}
+      RETURNING code`;
+    saved = rows.length === 1;
   }
-  const rows = await sql!`UPDATE jackpot_rooms
-    SET room_state = ${JSON.stringify(room)}::jsonb, updated_at = ${room.updatedAt}
-    WHERE code = ${room.code} AND updated_at = ${expectedUpdatedAt}
-    RETURNING code`;
-  return rows.length === 1;
+  if (saved) {
+    HOT_ROOM_CACHE.set(clean, { room, cachedAt: Date.now() });
+    broadcastRoomUpdate(room);
+  }
+  return saved;
 }
 
 export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
@@ -357,28 +418,32 @@ export async function addSharedPlayer(
 }
 
 export async function deleteSharedRoom(code: string): Promise<boolean> {
+  const clean = normalizeRoomCode(code);
+  HOT_ROOM_CACHE.delete(clean);
   await ensureRoomTable();
-  const clean = code.trim().toUpperCase();
   const withHyphen = clean.startsWith("JKP") && !clean.includes("-") ? `JKP-${clean.slice(3)}` : clean;
   const withoutHyphen = clean.replace(/-/g, "");
-  await sql!`DELETE FROM jackpot_rooms WHERE code = ${clean} OR code = ${withHyphen} OR REPLACE(code, '-', '') = ${withoutHyphen}`;
+  await sql!`DELETE FROM jackpot_rooms WHERE code = ${clean} OR code = ${withHyphen} OR code = ${withoutHyphen}`;
   return true;
 }
 
 export async function touchSharedPlayerPresence(code: string, playerId: string): Promise<void> {
   if (!code || !playerId) return;
-  const room = await readRoom(code.trim().toUpperCase());
+  const clean = normalizeRoomCode(code);
+  const cached = HOT_ROOM_CACHE.get(clean);
+  const room = cached?.room ?? (await readRoom(clean));
   if (!room) return;
   const player = room.players.find((p) => p.id === playerId);
   if (!player) return;
   const now = Date.now();
-  if (player.lastSeen && now - player.lastSeen < 6000) return;
+  if (player.lastSeen && now - player.lastSeen < 10000) return;
   const updated: SharedRoom = {
     ...room,
     players: room.players.map((p) => p.id === playerId ? { ...p, lastSeen: now } : p),
     updatedAt: room.status === "table" ? room.updatedAt : nextUpdatedAt(room),
   };
-  await saveRoom(updated, room.updatedAt);
+  HOT_ROOM_CACHE.set(clean, { room: updated, cachedAt: now });
+  void saveRoom(updated, room.updatedAt).catch(() => {});
 }
 
 export async function removeSharedPlayer(code: string, playerId: string, isDeliberate = true): Promise<{ success: boolean; error?: string }> {

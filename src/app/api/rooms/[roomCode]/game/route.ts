@@ -1,4 +1,4 @@
-import { isSharedPlayerAuthenticated, performSharedGameAction, restartSharedMatch, startNextSharedRound, rematchSharedMatch, type SharedGameAction } from "@/lib/shared-rooms";
+import { getSharedRoomView, isSharedPlayerAuthenticated, performSharedGameAction, restartSharedMatch, startNextSharedRound, rematchSharedMatch, type SharedGameAction } from "@/lib/shared-rooms";
 import { readRoomSessionToken } from "@/lib/room-auth";
 
 type RouteContext = { params: Promise<{ roomCode: string }> };
@@ -11,21 +11,22 @@ export async function POST(request: Request, { params }: RouteContext) {
   if (typeof body.playerId !== "string" || !["pass", "jackpot", "suspect", "signal", "fake-signal", "reaction", "restart", "next-round", "rematch"].includes(String(body.type))) {
     return Response.json({ error: "That game action is not available." }, { status: 400 });
   }
-  if (!await isSharedPlayerAuthenticated(roomCode, body.playerId, readRoomSessionToken(request, roomCode))) return Response.json({ error: "Reconnect to the room before playing." }, { status: 401 });
+  const token = readRoomSessionToken(request, roomCode);
+  if (!await isSharedPlayerAuthenticated(roomCode, body.playerId, token)) return Response.json({ error: "Reconnect to the room before playing." }, { status: 401 });
   if (body.type === "restart") {
     const restarted = await restartSharedMatch(roomCode, body.playerId);
     if (!restarted.room) return Response.json({ error: restarted.error }, { status: 403 });
-    return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: true, room: await getSharedRoomView(roomCode, body.playerId, token) }, { headers: { "Cache-Control": "no-store" } });
   }
   if (body.type === "next-round") {
     const nextRound = await startNextSharedRound(roomCode, body.playerId);
     if (!nextRound.room) return Response.json({ error: nextRound.error }, { status: 403 });
-    return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: true, room: await getSharedRoomView(roomCode, body.playerId, token) }, { headers: { "Cache-Control": "no-store" } });
   }
   if (body.type === "rematch") {
     const rematched = await rematchSharedMatch(roomCode, body.playerId);
     if (!rematched.room) return Response.json({ error: rematched.error }, { status: 403 });
-    return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: true, room: await getSharedRoomView(roomCode, body.playerId, token) }, { headers: { "Cache-Control": "no-store" } });
   }
   if (body.type === "pass" && typeof body.cardId !== "string") return Response.json({ error: "Choose a card in your hand." }, { status: 400 });
   if (body.type === "reaction" && typeof body.reactionId !== "string") return Response.json({ error: "Choose a reaction." }, { status: 400 });
@@ -36,5 +37,10 @@ export async function POST(request: Request, { params }: RouteContext) {
       : { type: body.type as "jackpot" | "suspect" | "signal" | "fake-signal", playerId: body.playerId };
   const result = await performSharedGameAction(roomCode, action as SharedGameAction);
   if (!result.room) return Response.json({ error: result.error }, { status: 409 });
-  return Response.json({ ok: true, notice: result.notice, suspectAttemptsRemaining: result.suspectAttemptsRemaining }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({
+    ok: true,
+    room: await getSharedRoomView(roomCode, body.playerId, token),
+    notice: result.notice,
+    suspectAttemptsRemaining: result.suspectAttemptsRemaining
+  }, { headers: { "Cache-Control": "no-store" } });
 }

@@ -35,6 +35,7 @@ import {
   MAX_PLAYER_NAME_LENGTH,
   normalizePlayerName,
   saveRoom,
+  type LocalChatMessage,
   type LocalRoom,
   type LocalSession,
   readSession,
@@ -402,19 +403,153 @@ export function JackpotApp() {
     return () => window.removeEventListener("storage", onStorage);
   }, [hydrated, roomCode]);
 
-  // Poll the authoritative room so every browser sees the same teams, game state, and results.
+  type SyncedSharedRoom = {
+    id: string;
+    code: string;
+    isPrivate: boolean;
+    maxPlayers: 4 | 6 | 8;
+    status: LocalRoom["status"];
+    hostPlayerId: string;
+    players: LocalRoom["players"];
+    chat: LocalRoom["chat"];
+    teams?: LocalRoom["teams"];
+    teamAcceptances?: LocalRoom["teamAcceptances"];
+    teamNotice?: string;
+    teamPhase?: LocalRoom["teamPhase"];
+    confirmationEndsAt?: number;
+    strategyEndsAt?: number;
+    gameSnapshot?: GameSnapshot | null;
+    scores?: ScoreBoard;
+    suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"];
+    round?: number;
+    result?: RoundResult | null;
+    gameAuthoritative?: boolean;
+    matchInterruption?: LocalRoom["matchInterruption"];
+    updatedAt: number;
+  };
+
+  const applySharedRoom = useCallback((shared: SyncedSharedRoom) => {
+    if (!shared || shared.updatedAt <= sharedRoomRevision.current) return;
+    sharedRoomRevision.current = shared.updatedAt;
+    const cached = findRoom(roomCode);
+    const syncedRoom: LocalRoom = {
+      id: shared.id,
+      code: shared.code,
+      isPrivate: shared.isPrivate,
+      maxPlayers: shared.maxPlayers,
+      status: shared.status,
+      hostPlayerId: shared.hostPlayerId,
+      players: shared.players,
+      chat: shared.chat,
+      teams: shared.teams,
+      teamAcceptances: shared.teamAcceptances,
+      teamNotice: shared.teamNotice,
+      teamPhase: shared.teamPhase,
+      confirmationEndsAt: shared.confirmationEndsAt,
+      strategyEndsAt: shared.strategyEndsAt,
+      game: shared.gameSnapshot !== undefined ? shared.gameSnapshot : cached?.game ?? null,
+      gameAuthoritative: shared.gameAuthoritative ?? cached?.gameAuthoritative,
+      scores: shared.scores ?? cached?.scores ?? emptyScores(),
+      suspectAttemptsRemaining: shared.suspectAttemptsRemaining ?? cached?.suspectAttemptsRemaining,
+      round: shared.round ?? cached?.round ?? 1,
+      result: shared.result ?? cached?.result ?? null,
+      matchInterruption: shared.matchInterruption,
+      updatedAt: shared.updatedAt,
+    };
+    saveRoom(syncedRoom);
+    setRoom(syncedRoom);
+    if (shared.matchInterruption !== undefined) {
+      setMatchInterruption(shared.matchInterruption ?? null);
+    }
+    if (shared.gameSnapshot !== undefined) {
+      const snapshot = shared.gameSnapshot;
+      const passEvents = snapshot?.passEvents ?? (snapshot?.lastPassEvent ? [snapshot.lastPassEvent] : []);
+      const previousPassIndex = passEvents.findIndex((event) => event.id === lastPassEventId.current);
+      for (const event of previousPassIndex >= 0 ? passEvents.slice(previousPassIndex + 1) : passEvents.slice(-1)) {
+        lastPassEventId.current = event.id;
+        if (Date.now() - event.createdAt < 5000) notifyCardPass(event);
+      }
+      const signalEvents = snapshot?.publicSignals ?? [];
+      const previousSignalIndex = signalEvents.findIndex((event) => event.id === lastSignalEventId.current);
+      for (const event of previousSignalIndex >= 0 ? signalEvents.slice(previousSignalIndex + 1) : signalEvents.slice(-1)) {
+        lastSignalEventId.current = event.id;
+        if (Date.now() - event.createdAt < 5000) notifySignal(event);
+      }
+      const gameNotices = snapshot?.publicNotices ?? [];
+      const previousNoticeIndex = gameNotices.findIndex((event) => event.id === lastGameNoticeId.current);
+      for (const event of previousNoticeIndex >= 0 ? gameNotices.slice(previousNoticeIndex + 1) : gameNotices.slice(-1)) {
+        lastGameNoticeId.current = event.id;
+        if (Date.now() - event.createdAt < 10_000) showTableToast(event.kind, event.title, event.message);
+      }
+      const reactionEvents = snapshot?.publicReactions ?? [];
+      const previousReactionIndex = reactionEvents.findIndex((event) => event.id === lastReactionEventId.current);
+      for (const event of previousReactionIndex >= 0 ? reactionEvents.slice(previousReactionIndex + 1) : reactionEvents.slice(-1)) {
+        lastReactionEventId.current = event.id;
+        if (Date.now() - event.createdAt < 4000) displayReaction(event);
+      }
+      setGame(snapshot);
+    }
+    if (shared.scores) {
+      setScores(shared.scores);
+      const winningTeam = (["Alpha", "Bravo"] as const).find((t) => (shared.scores?.[t] ?? 0) >= WINNING_SCORE);
+      setMatchWonTeam(winningTeam ?? null);
+    }
+    if (shared.round !== undefined) setRound(shared.round);
+    if (shared.result !== undefined) {
+      setResult(shared.result);
+      if (shared.result && shared.result.kind !== "suspect" && cached?.result?.title !== shared.result.title) {
+        showTableToast(shared.result.valid ? "success" : "warning", shared.result.title, shared.result.detail);
+      }
+    }
+    if (pathname.startsWith("/room/")) {
+      if (shared.status === "lobby" && (pathname.endsWith("/table") || pathname.endsWith("/signal") || pathname.endsWith("/result"))) {
+        router.replace(`/room/${encodeURIComponent(roomCode)}`);
+      } else if (shared.teamPhase === "strategy" && !pathname.endsWith("/signal")) {
+        router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
+      } else if (shared.teamPhase === "game" && !pathname.endsWith("/table")) {
+        if (screen === "signal" && tableLaunchCountdown !== null) {
+          // Allow the 3... 2... 1... countdown animation to complete smoothly before navigating
+        } else {
+          router.replace(`/room/${encodeURIComponent(roomCode)}/table`);
+        }
+      } else if (shared.status === "result" && !pathname.endsWith("/result")) {
+        router.replace(`/room/${encodeURIComponent(roomCode)}/result`);
+      } else if (shared.teamPhase === "strategy" && pathname.endsWith("/result")) {
+        router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
+      }
+    }
+  }, [roomCode, pathname, router, screen, tableLaunchCountdown, showTableToast, notifyCardPass, notifySignal, displayReaction]);
+
+  // Real-time EventSource connection with instant push + lightweight adaptive polling
   useEffect(() => {
-    if (!hydrated || !roomCode || !pathname.startsWith("/room/")) return;
+    if (!hydrated || !roomCode || !pathname.startsWith("/room/") || !session?.playerId) return;
     let active = true;
+    let eventSource: EventSource | null = null;
+
+    try {
+      eventSource = new EventSource(`/api/rooms/${encodeURIComponent(roomCode)}/events?playerId=${encodeURIComponent(session.playerId)}`);
+      eventSource.onmessage = (event) => {
+        if (!active) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.room) {
+            applySharedRoom(payload.room);
+          }
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // EventSource fallback
+    }
+
     const syncLobby = async () => {
       try {
-        const response = await fetch(`/api/rooms/${encodeURIComponent(roomCode)}?playerId=${encodeURIComponent(session?.playerId ?? "")}`, { cache: "no-store" });
-        if (response.status === 404 && session?.playerId) {
+        const response = await fetch(`/api/rooms/${encodeURIComponent(roomCode)}?playerId=${encodeURIComponent(session.playerId)}&since=${sharedRoomRevision.current}`, { cache: "no-store" });
+        if (response.status === 404) {
           const cachedRoom = findRoom(roomCode);
           if (cachedRoom?.hostPlayerId === session.playerId && roomRecoveryAttempted.current !== roomCode) {
             roomRecoveryAttempted.current = roomCode;
-            // A process restart can erase a room created before disk persistence was added.
-            // Recreate it as a fresh lobby; the old private hands cannot be reconstructed safely.
             await fetch("/api/rooms", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -424,108 +559,25 @@ export function JackpotApp() {
           return;
         }
         if (!response.ok) return;
-        const payload = await response.json() as { room?: { id: string; code: string; isPrivate: boolean; maxPlayers: 4 | 6 | 8; status: LocalRoom["status"]; hostPlayerId: string; players: LocalRoom["players"]; chat: LocalRoom["chat"]; teams?: LocalRoom["teams"]; teamAcceptances?: LocalRoom["teamAcceptances"]; teamNotice?: string; teamPhase?: LocalRoom["teamPhase"]; confirmationEndsAt?: number; strategyEndsAt?: number; gameSnapshot?: GameSnapshot | null; scores?: ScoreBoard; suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"]; round?: number; result?: RoundResult | null; gameAuthoritative?: boolean; matchInterruption?: LocalRoom["matchInterruption"]; updatedAt: number } };
-        const shared = payload.room;
-        if (!active || !shared || shared.updatedAt <= sharedRoomRevision.current) return;
-        sharedRoomRevision.current = shared.updatedAt;
-        const cached = findRoom(roomCode);
-        const syncedRoom: LocalRoom = {
-          id: shared.id,
-          code: shared.code,
-          isPrivate: shared.isPrivate,
-          maxPlayers: shared.maxPlayers,
-          status: shared.status,
-          hostPlayerId: shared.hostPlayerId,
-          players: shared.players,
-          chat: shared.chat,
-          teams: shared.teams,
-          teamAcceptances: shared.teamAcceptances,
-          teamNotice: shared.teamNotice,
-          teamPhase: shared.teamPhase,
-          confirmationEndsAt: shared.confirmationEndsAt,
-          strategyEndsAt: shared.strategyEndsAt,
-          game: shared.gameSnapshot !== undefined ? shared.gameSnapshot : cached?.game ?? null,
-          gameAuthoritative: shared.gameAuthoritative ?? cached?.gameAuthoritative,
-          scores: shared.scores ?? cached?.scores ?? emptyScores(),
-          suspectAttemptsRemaining: shared.suspectAttemptsRemaining ?? cached?.suspectAttemptsRemaining,
-          round: shared.round ?? cached?.round ?? 1,
-          result: shared.result ?? cached?.result ?? null,
-          matchInterruption: shared.matchInterruption,
-          updatedAt: shared.updatedAt,
-        };
-        saveRoom(syncedRoom);
-        setRoom(syncedRoom);
-        if (shared.matchInterruption !== undefined) {
-          setMatchInterruption(shared.matchInterruption ?? null);
-        }
-        if (shared.gameSnapshot !== undefined) {
-          const snapshot = shared.gameSnapshot;
-          const passEvents = snapshot?.passEvents ?? (snapshot?.lastPassEvent ? [snapshot.lastPassEvent] : []);
-          const previousPassIndex = passEvents.findIndex((event) => event.id === lastPassEventId.current);
-          for (const event of previousPassIndex >= 0 ? passEvents.slice(previousPassIndex + 1) : passEvents.slice(-1)) {
-            lastPassEventId.current = event.id;
-            if (Date.now() - event.createdAt < 5000) notifyCardPass(event);
-          }
-          const signalEvents = snapshot?.publicSignals ?? [];
-          const previousSignalIndex = signalEvents.findIndex((event) => event.id === lastSignalEventId.current);
-          for (const event of previousSignalIndex >= 0 ? signalEvents.slice(previousSignalIndex + 1) : signalEvents.slice(-1)) {
-            lastSignalEventId.current = event.id;
-            if (Date.now() - event.createdAt < 5000) notifySignal(event);
-          }
-          const gameNotices = snapshot?.publicNotices ?? [];
-          const previousNoticeIndex = gameNotices.findIndex((event) => event.id === lastGameNoticeId.current);
-          for (const event of previousNoticeIndex >= 0 ? gameNotices.slice(previousNoticeIndex + 1) : gameNotices.slice(-1)) {
-            lastGameNoticeId.current = event.id;
-            if (Date.now() - event.createdAt < 10_000) showTableToast(event.kind, event.title, event.message);
-          }
-          const reactionEvents = snapshot?.publicReactions ?? [];
-          const previousReactionIndex = reactionEvents.findIndex((event) => event.id === lastReactionEventId.current);
-          for (const event of previousReactionIndex >= 0 ? reactionEvents.slice(previousReactionIndex + 1) : reactionEvents.slice(-1)) {
-            lastReactionEventId.current = event.id;
-            if (Date.now() - event.createdAt < 4000) displayReaction(event);
-          }
-          setGame(snapshot);
-        }
-        if (shared.scores) {
-          setScores(shared.scores);
-          const winningTeam = (["Alpha", "Bravo"] as const).find((t) => (shared.scores?.[t] ?? 0) >= WINNING_SCORE);
-          setMatchWonTeam(winningTeam ?? null);
-        }
-        if (shared.round !== undefined) setRound(shared.round);
-        if (shared.result !== undefined) {
-          setResult(shared.result);
-          if (shared.result && shared.result.kind !== "suspect" && cached?.result?.title !== shared.result.title) {
-            showTableToast(shared.result.valid ? "success" : "warning", shared.result.title, shared.result.detail);
-          }
-        }
-        if (pathname.startsWith("/room/")) {
-          if (shared.status === "lobby" && (pathname.endsWith("/table") || pathname.endsWith("/signal") || pathname.endsWith("/result"))) {
-            router.replace(`/room/${encodeURIComponent(roomCode)}`);
-          } else if (shared.teamPhase === "strategy" && !pathname.endsWith("/signal")) {
-            router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
-          } else if (shared.teamPhase === "game" && !pathname.endsWith("/table")) {
-            if (screen === "signal" && tableLaunchCountdown !== null) {
-              // Allow the 3... 2... 1... countdown animation to complete smoothly before navigating
-            } else {
-              router.replace(`/room/${encodeURIComponent(roomCode)}/table`);
-            }
-          } else if (shared.status === "result" && !pathname.endsWith("/result")) {
-            router.replace(`/room/${encodeURIComponent(roomCode)}/result`);
-          } else if (shared.teamPhase === "strategy" && pathname.endsWith("/result")) {
-            router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
-          }
+        const payload = await response.json();
+        if (payload.unmodified) return;
+        if (payload.room) {
+          applySharedRoom(payload.room);
         }
       } catch {
-        // The saved local room remains usable while the room server is unavailable.
+        // network blip
       }
     };
+
     void syncLobby();
-    const timer = window.setInterval(syncLobby, 1200);
+    const pollInterval = screen === "table" ? 600 : 1500;
+    const timer = window.setInterval(syncLobby, pollInterval);
     return () => {
       active = false;
+      if (eventSource) eventSource.close();
       window.clearInterval(timer);
     };
-  }, [hydrated, roomCode, screen, pathname, router, session?.playerId, showTableToast, notifyCardPass, notifySignal, displayReaction]);
+  }, [hydrated, roomCode, screen, pathname, session?.playerId, applySharedRoom]);
 
   useEffect(() => {
     if (hydrated) writePreferences(preferences);
@@ -711,8 +763,8 @@ export function JackpotApp() {
     }
   }, [tableLaunchCountdown, navigate, room?.gameAuthoritative, round]);
 
-  const sendLobbyMessage = () => {
-    const text = chatDraft.trim();
+  const sendLobbyMessage = (overrideText?: string) => {
+    const text = (overrideText ?? chatDraft).trim();
     if (!room || !session || !text || text.length > 280) return;
     const now = Date.now();
     const nextRoom = {
@@ -727,7 +779,7 @@ export function JackpotApp() {
     };
     saveRoom(nextRoom);
     setRoom(nextRoom);
-    setChatDraft("");
+    if (!overrideText) setChatDraft("");
     void fetch(`/api/rooms/${encodeURIComponent(room.code)}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -987,14 +1039,26 @@ export function JackpotApp() {
         setOtherTeamLocked(Boolean(payload.privateRoom.otherTeamLocked));
         setAllTeamsLocked(Boolean(payload.privateRoom.allTeamsLocked));
         setTeamMates(payload.privateRoom.teammates ?? []);
-        setTeamChat(payload.privateRoom.chat ?? []);
+        if (payload.privateRoom.chat) {
+          setTeamChat((prev) => {
+            const incoming = payload.privateRoom?.chat ?? [];
+            if (incoming.length > prev.length) {
+              const latest = incoming[incoming.length - 1];
+              if (latest && latest.playerId !== activePlayerId) {
+                playCue("reaction");
+              }
+              return incoming;
+            }
+            return incoming.length >= prev.length ? incoming : prev;
+          });
+        }
         if (payload.privateRoom.endsAt) setStrategySeconds(Math.max(0, Math.ceil((payload.privateRoom.endsAt - Date.now()) / 1000)));
       } catch { /* reconnect on the next poll */ }
     };
     void refreshPrivateRoom();
     const timer = window.setInterval(refreshPrivateRoom, 1000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [screen, privateRoomCode, activePlayerId]);
+  }, [screen, privateRoomCode, activePlayerId, playCue]);
 
   const updateTeamPrivate = async (payload: { signal?: string; agree?: boolean; text?: string }) => {
     if (!room || !session) return;
@@ -1009,6 +1073,15 @@ export function JackpotApp() {
   const sendPrivateChatMessage = (overrideText?: string) => {
     const text = (overrideText ?? teamChatDraft).trim();
     if (!room || !session || !text || strategySeconds === 0) return;
+    const now = Date.now();
+    const optimisticMsg: LocalChatMessage = {
+      id: `team-msg-${now}-${Math.random().toString(36).slice(2, 8)}`,
+      playerId: session.playerId,
+      nickname,
+      text,
+      createdAt: now,
+    };
+    setTeamChat((prev) => [...prev, optimisticMsg]);
     void updateTeamPrivate({ text });
     if (!overrideText) setTeamChatDraft("");
   };
@@ -1130,7 +1203,7 @@ export function JackpotApp() {
       });
 
       let response = await sendRequest();
-      let payload = await response.json() as { error?: string; notice?: string; suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"] };
+      let payload = await response.json() as { error?: string; notice?: string; suspectAttemptsRemaining?: LocalRoom["suspectAttemptsRemaining"]; room?: SyncedSharedRoom };
       
       // Auto-retry once if a concurrency conflict was encountered
       if (response.status === 409 && payload.error?.toLowerCase().includes("room changed")) {
@@ -1145,6 +1218,9 @@ export function JackpotApp() {
         showTableToast("error", "Action failed", message);
       } else {
         setStatus(payload.notice || (type === "pass" ? "Card passed." : type.includes("signal") ? "Signal flashed." : `${type.toUpperCase()} called.`));
+        if (payload.room) {
+          applySharedRoom(payload.room);
+        }
       }
       if (payload.suspectAttemptsRemaining && room) {
         const updatedRoom = { ...room, suspectAttemptsRemaining: payload.suspectAttemptsRemaining };
@@ -1163,6 +1239,16 @@ export function JackpotApp() {
   const onPassSelected = () => {
     if (!game || !selectedCardId || !isYourPass) return;
     if (room?.gameAuthoritative) {
+      if (passReceiver && you) {
+        notifyCardPass({
+          id: `opt-pass-${Date.now()}`,
+          fromPlayerId: you.id,
+          fromName: you.name,
+          toPlayerId: passReceiver.id,
+          toName: passReceiver.name,
+          createdAt: Date.now(),
+        });
+      }
       void requestServerGameAction("pass", selectedCardId);
       return;
     }
@@ -2420,6 +2506,25 @@ export function JackpotApp() {
                       )}
                     </div>
 
+                    {/* Quick Lobby Chat Suggestions */}
+                    <div className="lobby-quick-chips">
+                      {[
+                        "👋 Ready to play!",
+                        "⚔️ Let's do this!",
+                        "👑 Host, start when ready!",
+                        "🤝 Good luck everyone!",
+                      ].map((phrase) => (
+                        <button
+                          type="button"
+                          key={phrase}
+                          className="lobby-quick-chip"
+                          onClick={() => sendLobbyMessage(phrase)}
+                        >
+                          {phrase}
+                        </button>
+                      ))}
+                    </div>
+
                     <form className="lobby-chat-input-bar" onSubmit={(event) => { event.preventDefault(); sendLobbyMessage(); }}>
                       <div className="name-input-well chat-input-well">
                         <input
@@ -2429,6 +2534,9 @@ export function JackpotApp() {
                           placeholder="Type a message to the room..."
                           aria-label="Lobby chat message"
                         />
+                        {chatDraft.length > 0 && (
+                          <span className="chat-char-counter">{chatDraft.length}/280</span>
+                        )}
                       </div>
                       <button
                         className="chat-send-btn"
@@ -2941,7 +3049,9 @@ export function JackpotApp() {
                           "Flash right after a pass",
                           "I'll flash on 4 of a kind",
                           "Watch my eyes after cards",
+                          "Pass circles / stars to me",
                           "Fake signal if suspected",
+                          "Ready to call Jackpot!",
                         ].map((suggestion) => (
                           <button
                             type="button"
@@ -2971,6 +3081,9 @@ export function JackpotApp() {
                             placeholder={`Message ${partnerName}...`}
                             aria-label="Private message to partner"
                           />
+                          {teamChatDraft.length > 0 && (
+                            <span className="chat-char-counter">{teamChatDraft.length}/280</span>
+                          )}
                         </div>
                         <button
                           type="submit"
