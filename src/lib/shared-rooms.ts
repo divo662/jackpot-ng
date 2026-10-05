@@ -90,8 +90,85 @@ export function broadcastRoomUpdate(room: SharedRoom): void {
   }
 }
 
+export type PlayerProfile = {
+  playerId: string;
+  nickname: string;
+  lastRoomCode?: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
 const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
 let schemaReady: Promise<void> | null = null;
+let playerSchemaReady: Promise<void> | null = null;
+
+export async function ensurePlayerTable(): Promise<void> {
+  if (!sql) throw new Error("DATABASE_URL is missing. Add your Neon connection string to .env.local and Vercel environment variables.");
+  if (!playerSchemaReady) {
+    playerSchemaReady = (async () => {
+      await sql!`CREATE TABLE IF NOT EXISTS jackpot_players (
+        player_id TEXT PRIMARY KEY,
+        nickname TEXT NOT NULL,
+        last_room_code TEXT,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      )`;
+    })();
+  }
+  try {
+    await playerSchemaReady;
+  } catch (error) {
+    playerSchemaReady = null;
+    throw error;
+  }
+}
+
+export async function savePlayerProfile(
+  playerId: string,
+  nickname: string,
+  lastRoomCode?: string | null
+): Promise<PlayerProfile> {
+  await ensurePlayerTable();
+  const cleanName = normalizePlayerName(nickname);
+  const now = Date.now();
+  const rows = await sql!`
+    INSERT INTO jackpot_players (player_id, nickname, last_room_code, created_at, updated_at)
+    VALUES (${playerId}, ${cleanName}, ${lastRoomCode ?? null}, ${now}, ${now})
+    ON CONFLICT (player_id) DO UPDATE
+    SET nickname = ${cleanName},
+        last_room_code = COALESCE(${lastRoomCode ?? null}, jackpot_players.last_room_code),
+        updated_at = ${now}
+    RETURNING player_id, nickname, last_room_code, created_at, updated_at
+  `;
+  const r = rows[0];
+  return {
+    playerId: r.player_id,
+    nickname: r.nickname,
+    lastRoomCode: r.last_room_code,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+export async function getPlayerProfile(playerId: string): Promise<PlayerProfile | null> {
+  if (!playerId) return null;
+  await ensurePlayerTable();
+  const rows = await sql!`
+    SELECT player_id, nickname, last_room_code, created_at, updated_at
+    FROM jackpot_players
+    WHERE player_id = ${playerId}
+    LIMIT 1
+  `;
+  if (!rows[0]) return null;
+  const r = rows[0];
+  return {
+    playerId: r.player_id,
+    nickname: r.nickname,
+    lastRoomCode: r.last_room_code,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
 
 async function ensureRoomTable(): Promise<void> {
   if (!sql) throw new Error("DATABASE_URL is missing. Add your Neon connection string to .env.local and Vercel environment variables.");
@@ -116,7 +193,7 @@ async function readRoom(code: string, forceFresh = false): Promise<SharedRoom | 
   const clean = normalizeRoomCode(code);
   if (!forceFresh) {
     const cached = HOT_ROOM_CACHE.get(clean);
-    if (cached && Date.now() - cached.cachedAt < 5000) {
+    if (cached && Date.now() - cached.cachedAt < 200) {
       return cached.room;
     }
   }
@@ -156,8 +233,8 @@ async function saveRoom(room: SharedRoom, expectedUpdatedAt?: number): Promise<b
   return saved;
 }
 
-export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
-  let room = await readRoom(code.trim().toUpperCase());
+export async function getSharedRoom(code: string, forceFresh = false): Promise<SharedRoom | null> {
+  let room = await readRoom(code.trim().toUpperCase(), forceFresh);
   if (room && !room.playerTokens) {
     const previous = room;
     room = {
@@ -166,7 +243,7 @@ export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
       tokenClaims: Object.fromEntries(room.players.map((player) => [player.id, false])),
       updatedAt: nextUpdatedAt(room),
     };
-    if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code);
+    if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code, true);
   }
   // Replace rounds dealt by the previous setup with 100% real cards.
   if (room?.status === "table" && room.gameAuthoritative && room.gameSnapshot && room.dealVersion !== 7) {
@@ -184,11 +261,11 @@ export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
       pendingSignalTruth: undefined,
       updatedAt: nextUpdatedAt(room),
     };
-    if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code);
+    if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code, true);
   }
   if (room?.teamPhase === "confirmation" && room.confirmationEndsAt && Date.now() >= room.confirmationEndsAt) {
     const expired: SharedRoom = { ...room, teams: undefined, teamAcceptances: undefined, teamPhase: "assignment", teamNotice: "The 20-second team confirmation expired. The host can assign teams again.", confirmationEndsAt: undefined, updatedAt: nextUpdatedAt(room) };
-    return await saveRoom(expired, room.updatedAt) ? expired : await readRoom(room.code);
+    return await saveRoom(expired, room.updatedAt) ? expired : await readRoom(room.code, true);
   }
   if (room && room.teamPhase === "strategy") {
     const currentRoom = room;
@@ -288,7 +365,7 @@ export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
         ].slice(-100),
         updatedAt: nextUpdatedAt(room),
       };
-      if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code);
+      if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code, true);
     }
   }
   return room;
@@ -326,14 +403,21 @@ export async function getSharedRoomView(code: string, playerId: string, token: s
 }
 
 export async function beginTeamAssignment(code: string, requesterId: string): Promise<TeamActionResult> {
-  const room = await getSharedRoom(code);
-  if (!room) return { error: "This room is no longer available." };
-  if (room.hostPlayerId !== requesterId) return { error: "Only the room host can assign teams." };
-  if (room.status !== "lobby") return { error: "Team assignment is no longer available." };
-  if (room.players.length < 4 || room.players.length % 2 !== 0) return { error: "Join with an even number of at least four players to assign teams." };
-  const next = { ...room, teamPhase: "assignment" as const, updatedAt: nextUpdatedAt(room) };
-  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-  return { room: next };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const room = await getSharedRoom(code, true);
+    if (!room) return { error: "This room is no longer available." };
+    if (room.hostPlayerId !== requesterId) return { error: "Only the room host can assign teams." };
+    if (room.status !== "lobby") return { error: "Team assignment is no longer available." };
+    if (room.players.length < 4 || room.players.length % 2 !== 0) {
+      return { error: "Join with an even number of at least four players to assign teams." };
+    }
+    const next = { ...room, teamPhase: "assignment" as const, updatedAt: nextUpdatedAt(room) };
+    if (await saveRoom(next, room.updatedAt)) {
+      return { room: next };
+    }
+    await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+  }
+  return { error: "Room is busy updating. Please try again." };
 }
 
 export async function createSharedRoom(room: SharedRoom): Promise<boolean> {
@@ -373,48 +457,62 @@ export async function addSharedPlayer(
   token = "",
 ): Promise<{ room?: SharedRoom; token?: string; error?: string }> {
   player = { ...player, nickname: normalizePlayerName(player.nickname) };
-  let room = await getSharedRoom(code);
-  if (!room) return { error: "Room not found. Check the link or room code." };
+  void savePlayerProfile(player.id, player.nickname, code).catch(() => {});
 
-  const existing = room.players.find((entry) => entry.id === player.id);
-  if (existing) {
-    let playerToken = room.playerTokens?.[player.id];
-    if (!await isSharedPlayerAuthenticated(code, player.id, token)) {
-      if (room.tokenClaims?.[player.id]) return { error: "This player seat is already signed in on another session." };
-      playerToken = playerToken ?? createPlayerToken();
-      const updated = { ...room, playerTokens: { ...room.playerTokens, [player.id]: playerToken }, tokenClaims: { ...room.tokenClaims, [player.id]: true }, updatedAt: nextUpdatedAt(room) };
-      if (!await saveRoom(updated, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-      room = updated;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let room = await getSharedRoom(code, true);
+    if (!room) return { error: "Room not found. Check the link or room code." };
+
+    const existing = room.players.find((entry) => entry.id === player.id);
+    if (existing) {
+      let playerToken = room.playerTokens?.[player.id];
+      if (!await isSharedPlayerAuthenticated(code, player.id, token)) {
+        if (room.tokenClaims?.[player.id]) return { error: "This player seat is already signed in on another session." };
+        playerToken = playerToken ?? createPlayerToken();
+        const updated = { ...room, playerTokens: { ...room.playerTokens, [player.id]: playerToken }, tokenClaims: { ...room.tokenClaims, [player.id]: true }, updatedAt: nextUpdatedAt(room) };
+        if (!await saveRoom(updated, room.updatedAt)) {
+          await new Promise((r) => setTimeout(r, 35 * (attempt + 1)));
+          continue;
+        }
+        room = updated;
+      }
+      if (existing.nickname === player.nickname) return { room: await getSharedRoom(code, true) ?? room, token: playerToken };
+      const renamed = {
+        ...room,
+        players: room.players.map((entry) => entry.id === player.id ? { ...entry, nickname: player.nickname, lastSeen: Date.now() } : entry),
+        updatedAt: nextUpdatedAt(room),
+      };
+      if (!await saveRoom(renamed, room.updatedAt)) {
+        await new Promise((r) => setTimeout(r, 35 * (attempt + 1)));
+        continue;
+      }
+      return { room: renamed, token: playerToken };
     }
-    if (existing.nickname === player.nickname) return { room: await getSharedRoom(code) ?? room, token: playerToken };
-    const renamed = {
+    if (room.status !== "lobby" || (room.teamPhase && room.teamPhase !== "lobby")) return { error: "Team selection has started, so this room is closed to new players." };
+    if (room.players.length >= room.maxPlayers) return { error: "This room is already full." };
+
+    const playerToken = createPlayerToken();
+    const next: SharedRoom = {
       ...room,
-      players: room.players.map((entry) => entry.id === player.id ? { ...entry, nickname: player.nickname, lastSeen: Date.now() } : entry),
+      players: [...room.players, { ...player, isAdmin: false, lastSeen: Date.now() }],
+      playerTokens: { ...room.playerTokens, [player.id]: playerToken },
+      tokenClaims: { ...room.tokenClaims, [player.id]: true },
+      chat: [...room.chat, {
+        id: `message-${crypto.randomUUID()}`,
+        playerId: player.id,
+        nickname: player.nickname,
+        text: `${player.nickname} joined the room.`,
+        createdAt: Date.now(),
+        system: true,
+      }].slice(-100),
       updatedAt: nextUpdatedAt(room),
     };
-    if (!await saveRoom(renamed, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-    return { room: renamed, token: playerToken };
+    if (await saveRoom(next, room.updatedAt)) {
+      return { room: next, token: playerToken };
+    }
+    await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
   }
-  if (room.status !== "lobby" || (room.teamPhase && room.teamPhase !== "lobby")) return { error: "Team selection has started, so this room is closed to new players." };
-  if (room.players.length >= room.maxPlayers) return { error: "This room is already full." };
-
-  const next: SharedRoom = {
-    ...room,
-    players: [...room.players, { ...player, isAdmin: false, lastSeen: Date.now() }],
-    playerTokens: { ...room.playerTokens, [player.id]: createPlayerToken() },
-    tokenClaims: { ...room.tokenClaims, [player.id]: true },
-    chat: [...room.chat, {
-      id: `message-${crypto.randomUUID()}`,
-      playerId: player.id,
-      nickname: player.nickname,
-      text: `${player.nickname} joined the room.`,
-      createdAt: Date.now(),
-      system: true,
-    }].slice(-100),
-    updatedAt: nextUpdatedAt(room),
-  };
-  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-  return { room: next, token: next.playerTokens?.[player.id] };
+  return { error: "Room was updating simultaneously. Please tap join again." };
 }
 
 export async function deleteSharedRoom(code: string): Promise<boolean> {
@@ -607,74 +705,87 @@ export async function assignSharedTeams(
   assignments: Record<string, "Alpha" | "Bravo">,
   shuffle = false,
 ): Promise<TeamActionResult> {
-  const room = await getSharedRoom(code);
-  if (!room) return { error: "This room is no longer available." };
-  if (room.hostPlayerId !== requesterId) return { error: "Only the room host can assign teams." };
-  if (room.teamPhase !== "assignment") return { error: "Open team assignment before submitting teams." };
-  if (room.status !== "lobby" || room.players.length < 4 || room.players.length % 2 !== 0) {
-    return { error: "Teams need an even number of at least four players." };
-  }
-
-  const playerIds = room.players.map((player) => player.id);
-  let teams = assignments;
-  if (shuffle) {
-    const shuffled = [...playerIds];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = randomInt(i + 1);
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const room = await getSharedRoom(code, true);
+    if (!room) return { error: "This room is no longer available." };
+    if (room.hostPlayerId !== requesterId) return { error: "Only the room host can assign teams." };
+    if (room.teamPhase !== "assignment") return { error: "Open team assignment before submitting teams." };
+    if (room.status !== "lobby" || room.players.length < 4 || room.players.length % 2 !== 0) {
+      return { error: "Teams need an even number of at least four players." };
     }
-    teams = Object.fromEntries(shuffled.map((id, index) => [id, index < shuffled.length / 2 ? "Alpha" : "Bravo"]));
-  }
-  const balanced = playerIds.length / 2;
-  if (playerIds.some((id) => teams[id] !== "Alpha" && teams[id] !== "Bravo") ||
-      Object.keys(teams).length !== playerIds.length ||
-      playerIds.filter((id) => teams[id] === "Alpha").length !== balanced) {
-    return { error: "Place every player into balanced teams before continuing." };
-  }
 
-  const now = nextUpdatedAt(room);
-  const next: SharedRoom = {
-    ...room,
-    teams: { ...teams },
-    teamAcceptances: Object.fromEntries(playerIds.map((id) => [id, false])),
-    teamPhase: "confirmation",
-    teamNotice: undefined,
-    confirmationEndsAt: now + 20_000,
-    updatedAt: now,
-  };
-  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-  return { room: next };
+    const playerIds = room.players.map((player) => player.id);
+    let teams = assignments;
+    if (shuffle) {
+      const shuffled = [...playerIds];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = randomInt(i + 1);
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      teams = Object.fromEntries(shuffled.map((id, index) => [id, index < shuffled.length / 2 ? "Alpha" : "Bravo"]));
+    }
+    const balanced = playerIds.length / 2;
+    if (playerIds.some((id) => teams[id] !== "Alpha" && teams[id] !== "Bravo") ||
+        Object.keys(teams).length !== playerIds.length ||
+        playerIds.filter((id) => teams[id] === "Alpha").length !== balanced) {
+      return { error: "Place every player into balanced teams before continuing." };
+    }
+
+    const now = nextUpdatedAt(room);
+    const next: SharedRoom = {
+      ...room,
+      teams: { ...teams },
+      teamAcceptances: Object.fromEntries(playerIds.map((id) => [id, false])),
+      teamPhase: "confirmation",
+      teamNotice: undefined,
+      confirmationEndsAt: now + 20_000,
+      updatedAt: now,
+    };
+    if (await saveRoom(next, room.updatedAt)) {
+      return { room: next };
+    }
+    await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+  }
+  return { error: "Room changed just now. Please try again." };
 }
 
 export async function respondToTeamAssignment(code: string, playerId: string, accept: boolean): Promise<TeamActionResult> {
-  const room = await getSharedRoom(code);
-  if (!room) return { error: "This room is no longer available." };
-  if (room.teamPhase !== "confirmation" || !room.teams?.[playerId]) return { error: "Team confirmation is no longer active." };
-  if (room.confirmationEndsAt && Date.now() >= room.confirmationEndsAt) return { error: "The team confirmation has expired." };
-  if (!accept) {
-    const next: SharedRoom = { ...room, teams: undefined, teamAcceptances: undefined, teamPhase: "assignment", teamNotice: "A player rejected the team assignment. Adjust the teams and confirm again.", confirmationEndsAt: undefined, updatedAt: nextUpdatedAt(room) };
-    if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-    return { room: next };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const room = await getSharedRoom(code, true);
+    if (!room) return { error: "This room is no longer available." };
+    if (room.teamPhase !== "confirmation" || !room.teams?.[playerId]) return { error: "Team confirmation is no longer active." };
+    if (room.confirmationEndsAt && Date.now() >= room.confirmationEndsAt) return { error: "The team confirmation has expired." };
+    if (!accept) {
+      const next: SharedRoom = { ...room, teams: undefined, teamAcceptances: undefined, teamPhase: "assignment", teamNotice: "A player rejected the team assignment. Adjust the teams and confirm again.", confirmationEndsAt: undefined, updatedAt: nextUpdatedAt(room) };
+      if (await saveRoom(next, room.updatedAt)) {
+        return { room: next };
+      }
+      await new Promise((r) => setTimeout(r, 35 * (attempt + 1)));
+      continue;
+    }
+    if (room.teamAcceptances?.[playerId]) return { room };
+    const acceptances = { ...room.teamAcceptances, [playerId]: true };
+    const allAccepted = room.players.every((player) => acceptances[player.id]);
+    const now = nextUpdatedAt(room);
+    const next: SharedRoom = {
+      ...room,
+      teamAcceptances: acceptances,
+      teamPhase: allAccepted ? "strategy" : "confirmation",
+      status: allAccepted ? "strategy" : room.status,
+      strategyEndsAt: allAccepted ? now + 60_000 : room.strategyEndsAt,
+      teamChats: allAccepted ? { Alpha: [], Bravo: [] } : room.teamChats,
+      teamSignalBy: allAccepted ? {} : room.teamSignalBy,
+      teamSignalAgreements: allAccepted ? {} : room.teamSignalAgreements,
+      teamSignalLocked: allAccepted ? {} : room.teamSignalLocked,
+      confirmationEndsAt: allAccepted ? undefined : room.confirmationEndsAt,
+      updatedAt: now,
+    };
+    if (await saveRoom(next, room.updatedAt)) {
+      return { room: next };
+    }
+    await new Promise((r) => setTimeout(r, 35 * (attempt + 1)));
   }
-  if (room.teamAcceptances?.[playerId]) return { room };
-  const acceptances = { ...room.teamAcceptances, [playerId]: true };
-  const allAccepted = room.players.every((player) => acceptances[player.id]);
-  const now = nextUpdatedAt(room);
-  const next: SharedRoom = {
-    ...room,
-    teamAcceptances: acceptances,
-    teamPhase: allAccepted ? "strategy" : "confirmation",
-    status: allAccepted ? "strategy" : room.status,
-    strategyEndsAt: allAccepted ? now + 60_000 : room.strategyEndsAt,
-    teamChats: allAccepted ? { Alpha: [], Bravo: [] } : room.teamChats,
-    teamSignalBy: allAccepted ? {} : room.teamSignalBy,
-    teamSignalAgreements: allAccepted ? {} : room.teamSignalAgreements,
-    teamSignalLocked: allAccepted ? {} : room.teamSignalLocked,
-    confirmationEndsAt: allAccepted ? undefined : room.confirmationEndsAt,
-    updatedAt: now,
-  };
-  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-  return { room: next };
+  return { error: "Room changed just now. Please try again." };
 }
 
 export async function getPrivateTeamRoom(code: string, playerId: string): Promise<{

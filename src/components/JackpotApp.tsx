@@ -121,6 +121,8 @@ export function JackpotApp() {
   const [otherTeamLocked, setOtherTeamLocked] = useState(false);
   const [allTeamsLocked, setAllTeamsLocked] = useState(false);
   const [teamMates, setTeamMates] = useState<Array<{ id: string; nickname: string }>>([]);
+  const [teamActionBusy, setTeamActionBusy] = useState(false);
+  const autoJoinAttempted = useRef<string | null>(null);
 
   const [signalFlash, setSignalFlash] = useState(false);
   const [signalClock, setSignalClock] = useState(0);
@@ -293,6 +295,10 @@ export function JackpotApp() {
     for (const timer of toastTimers.current.values()) window.clearTimeout(timer);
   }, []);
 
+  const isPlayerInRoom = Boolean(
+    room && session?.playerId && room.players.some((player) => player.id === session.playerId)
+  );
+
   const screen: Screen = pathname === "/how-to"
     ? "howto"
     : pathname === "/create"
@@ -308,9 +314,11 @@ export function JackpotApp() {
           : pathname.endsWith("/result")
             ? "result"
             : pathname.startsWith("/room/")
-              ? room?.teamPhase === "assignment" || room?.teamPhase === "confirmation"
-                ? "teams"
-                : room || !joinCode ? "lobby" : "join"
+              ? !session?.playerId || (!isPlayerInRoom && !nickname.trim() && !profileDraft.trim())
+                ? "join"
+                : room?.teamPhase === "assignment" || room?.teamPhase === "confirmation"
+                  ? "teams"
+                  : "lobby"
               : "home";
 
   const navigate = useCallback((destination: Screen, destinationRoomCode = roomCode) => {
@@ -338,6 +346,32 @@ export function JackpotApp() {
       setProfileDraft(guestName);
       setNickname(guestName);
       setPreferences(readPreferences());
+
+      // Fetch persistent database profile (tied to httpOnly cookie jackpot_player_id)
+      void fetch("/api/profile")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { profile?: { playerId: string; nickname: string } } | null) => {
+          if (data?.profile?.nickname) {
+            const dbNick = normalizePlayerName(data.profile.nickname);
+            setNickname((current) => current || dbNick);
+            setProfileDraft((current) => current || dbNick);
+            setSession((current) => {
+              if (!current) {
+                const newSession: LocalSession = {
+                  playerId: data.profile!.playerId,
+                  nickname: dbNick,
+                  roomCode: "",
+                  updatedAt: Date.now(),
+                };
+                writeSession(newSession);
+                return newSession;
+              }
+              return current;
+            });
+          }
+        })
+        .catch(() => undefined);
+
       const routeCode = pathname.startsWith("/room/")
         ? decodeURIComponent(pathname.split("/")[2] ?? "")
         : "";
@@ -818,16 +852,30 @@ export function JackpotApp() {
   };
 
   const saveProfileName = async () => {
-    if (!session) {
-      const cleanName = normalizePlayerName(profileDraft);
-      setNickname(cleanName);
-      setProfileDraft(cleanName);
-      setSettingsStatus("Guest name saved on this browser.");
-      return;
-    }
     const cleanName = normalizePlayerName(profileDraft);
     if (!cleanName) return;
     setSettingsStatus("Saving display name…");
+    const activePlayerId = session?.playerId || createPlayerId();
+    void fetch("/api/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: activePlayerId, nickname: cleanName }),
+    }).catch(() => undefined);
+
+    if (!session) {
+      const nextSession: LocalSession = {
+        playerId: activePlayerId,
+        nickname: cleanName,
+        roomCode: roomCode || "",
+        updatedAt: Date.now(),
+      };
+      writeSession(nextSession);
+      setSession(nextSession);
+      setNickname(cleanName);
+      setProfileDraft(cleanName);
+      setSettingsStatus("Display name saved to profile.");
+      return;
+    }
     try {
       if (roomCode) {
         const response = await fetch(`/api/rooms/${encodeURIComponent(roomCode)}`, {
@@ -939,6 +987,11 @@ export function JackpotApp() {
     setNickname(cleanNick);
     setSessionError("");
     setCreatedInviteCode(created.room.code);
+    void fetch("/api/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: created.session.playerId, nickname: cleanNick }),
+    }).catch(() => undefined);
     try {
       const response = await fetch("/api/rooms", {
         method: "POST",
@@ -956,7 +1009,7 @@ export function JackpotApp() {
 
   const joinRoom = async (overrideCode?: string) => {
     const code = (overrideCode ?? joinCode).trim().toUpperCase();
-    const cleanNickname = normalizePlayerName(nickname);
+    const cleanNickname = normalizePlayerName(nickname || profileDraft || session?.nickname || "");
     if (!code) {
       setSessionError("Please enter a room code.");
       return;
@@ -970,15 +1023,13 @@ export function JackpotApp() {
     setSessionError("");
     try {
       const previousSession = readSession();
-      const playerId = previousSession?.roomCode === code
-        ? previousSession.playerId
-        : createPlayerId();
+      const playerId = session?.playerId || previousSession?.playerId || createPlayerId();
       const response = await fetch(`/api/rooms/${encodeURIComponent(code)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ playerId, nickname: cleanNickname }),
       });
-      const payload = await response.json() as { room?: { id: string; code: string; isPrivate: boolean; maxPlayers: 4 | 6 | 8; status: LocalRoom["status"]; hostPlayerId: string; players: LocalRoom["players"]; chat: LocalRoom["chat"]; teams?: LocalRoom["teams"]; teamAcceptances?: LocalRoom["teamAcceptances"]; teamNotice?: string; teamPhase?: LocalRoom["teamPhase"]; confirmationEndsAt?: number; strategyEndsAt?: number; updatedAt: number }; error?: string };
+      const payload = await response.json() as { room?: SyncedSharedRoom; error?: string };
       if (!response.ok || !payload.room) {
         setSessionError(payload.error ?? "This room could not be joined. Check the code and try again.");
         return;
@@ -1017,12 +1068,36 @@ export function JackpotApp() {
         roomCode: shared.code,
         updatedAt: Date.now(),
       };
+
+      // Reset any old room state before applying new room
+      setGame(null);
+      setScores(emptyScores());
+      setRound(1);
+      setResult(null);
+      setTeamDraft({});
+      setTeamChat([]);
+      setTeamMates([]);
+      setTeamSignalAgreements({});
+      setTeamSignalLocked(false);
+      setOtherTeamLocked(false);
+      setAllTeamsLocked(false);
+      setTableLaunchCountdown(null);
+      sharedRoomRevision.current = 0;
+
       saveRoom(joinedRoom);
       writeSession(nextSession);
       setSession(nextSession);
       setRoom(joinedRoom);
       setRoomCode(shared.code);
       setNickname(joinedPlayer.nickname);
+
+      void fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId, nickname: joinedPlayer.nickname }),
+      }).catch(() => undefined);
+
+      applySharedRoom(shared);
       navigate("lobby", shared.code);
     } catch {
       setSessionError("Could not reach the room. Make sure the host's Jackpot app is running, then retry.");
@@ -1030,6 +1105,60 @@ export function JackpotApp() {
       setJoining(false);
     }
   };
+
+  // Auto-join room when navigating to /room/[code] or /join/[code] with an existing profile
+  useEffect(() => {
+    if (!hydrated) return;
+    const targetCode = (
+      pathname.startsWith("/room/")
+        ? decodeURIComponent(pathname.split("/")[2] ?? "")
+        : pathname.startsWith("/join/")
+          ? decodeURIComponent(pathname.split("/")[2] ?? "")
+          : ""
+    ).trim().toUpperCase();
+
+    if (!targetCode) return;
+
+    // Reset old room state when route code changes
+    if (roomCode && roomCode !== targetCode) {
+      setRoomCode(targetCode);
+      setRoom(null);
+      setGame(null);
+      setScores(emptyScores());
+      setRound(1);
+      setResult(null);
+      setTeamDraft({});
+      setTeamChat([]);
+      setTeamMates([]);
+      setTeamSignalAgreements({});
+      setTeamSignalLocked(false);
+      setOtherTeamLocked(false);
+      setAllTeamsLocked(false);
+      setTableLaunchCountdown(null);
+      sharedRoomRevision.current = 0;
+    }
+
+    // Check if player is already seated in this room
+    const isSeated = Boolean(
+      room &&
+      room.code === targetCode &&
+      session?.playerId &&
+      room.players.some((p) => p.id === session.playerId)
+    );
+
+    if (isSeated) {
+      autoJoinAttempted.current = targetCode;
+      return;
+    }
+
+    if (autoJoinAttempted.current === targetCode || joining) return;
+
+    const effectiveNickname = (nickname || profileDraft || session?.nickname || "").trim();
+    if (!effectiveNickname) return;
+
+    autoJoinAttempted.current = targetCode;
+    void joinRoom(targetCode);
+  }, [hydrated, pathname, roomCode, room, session?.playerId, nickname, profileDraft, session?.nickname, joining]);
 
   useEffect(() => {
     if (!room?.confirmationEndsAt || room.teamPhase !== "confirmation") return;
@@ -1128,19 +1257,31 @@ export function JackpotApp() {
   };
 
   const teamAction = async (action: string, extra: Record<string, unknown> = {}) => {
-    if (!room || !session) return;
+    if (!room || !session || teamActionBusy) return;
+    setTeamActionBusy(true);
     try {
       const response = await fetch(`/api/rooms/${encodeURIComponent(room.code)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ playerId: session.playerId, action, ...extra }),
       });
-      const payload = await response.json() as { error?: string };
-      if (!response.ok) setStatus(payload.error ?? "That team action could not be completed.");
-      else if (action === "assign-teams" && room.teamPhase === "assignment") navigate("teams", room.code);
-      else if (action === "respond" && extra.accept === false) setStatus("Team assignment rejected. The host can adjust teams.");
+      const payload = await response.json() as { error?: string; room?: SyncedSharedRoom };
+      if (!response.ok) {
+        setStatus(payload.error ?? "That team action could not be completed.");
+      } else {
+        if (payload.room) {
+          applySharedRoom(payload.room);
+        }
+        if (action === "assign-teams" && (payload.room?.teamPhase === "assignment" || room.teamPhase === "assignment")) {
+          navigate("teams", room.code);
+        } else if (action === "respond" && extra.accept === false) {
+          setStatus("Team assignment rejected. The host can adjust teams.");
+        }
+      }
     } catch {
       setStatus("Room connection lost. Reconnecting to the lobby…");
+    } finally {
+      setTeamActionBusy(false);
     }
   };
 
@@ -2582,10 +2723,16 @@ export function JackpotApp() {
                     <button
                       type="button"
                       className="game-primary-btn lobby-primary-action-btn"
-                      disabled={lobbyPlayers.length < 2}
+                      disabled={lobbyPlayers.length < 4 || lobbyPlayers.length % 2 !== 0 || teamActionBusy}
                       onClick={() => void teamAction("begin-assignment")}
                     >
-                      {lobbyPlayers.length < 2 ? "WAITING FOR PLAYERS (MIN 2)" : "ASSIGN TEAMS →"}
+                      {teamActionBusy
+                        ? "PREPARING TEAMS…"
+                        : lobbyPlayers.length < 4
+                          ? `WAITING FOR PLAYERS (${lobbyPlayers.length}/4 MIN)`
+                          : lobbyPlayers.length % 2 !== 0
+                            ? `NEED EVEN PLAYERS (${lobbyPlayers.length} JOINED)`
+                            : "ASSIGN TEAMS →"}
                     </button>
                   ) : (
                     <div className="lobby-waiting-host-notice">
@@ -2786,17 +2933,19 @@ export function JackpotApp() {
                           type="button"
                           className="game-primary-btn"
                           disabled={
+                            teamActionBusy ||
                             room.players.some((p) => !currentTeamDraft[p.id]) ||
                             room.players.filter((p) => currentTeamDraft[p.id] === "Alpha").length !==
                               room.players.length / 2
                           }
                           onClick={() => void teamAction("assign-teams", { assignments: currentTeamDraft })}
                         >
-                          CONFIRM TEAMS →
+                          {teamActionBusy ? "CONFIRMING TEAMS…" : "CONFIRM TEAMS →"}
                         </button>
                         <button
                           type="button"
                           className="game-ghost-btn"
+                          disabled={teamActionBusy}
                           onClick={() => void teamAction("assign-teams", { shuffle: true })}
                         >
                           Shuffle Randomly
