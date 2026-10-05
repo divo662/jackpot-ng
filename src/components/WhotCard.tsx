@@ -10,7 +10,7 @@ type WhotCardProps = {
   onClick?: () => void;
 };
 
-const SUIT_LABELS: Record<Suit, string> = {
+export const SUIT_LABELS: Record<Suit, string> = {
   circle: "Circle",
   triangle: "Triangle",
   cross: "Cross",
@@ -22,7 +22,7 @@ const SUIT_LABELS: Record<Suit, string> = {
 };
 
 /** One deterministic SVG mark per suit that scales smoothly with card container. */
-function SuitMark({ suit, size = "lg" }: { suit: Suit; size?: "sm" | "lg" }) {
+export function SuitMark({ suit, size = "lg" }: { suit: Suit; size?: "sm" | "lg" }) {
   const cls = size === "sm" ? "suit-mark-sm" : "suit-mark-lg";
 
   switch (suit) {
@@ -134,6 +134,8 @@ export function WhotCard({
       </div>
     );
   }
+
+
 
   const label = `${SUIT_LABELS[card.suit]} ${card.number ?? ""} card`;
   const faceNumber = card.number ?? 1;

@@ -84,7 +84,7 @@ export function createPlayerSlots(names: readonly string[] = DEFAULT_PLAYER_NAME
     id: `player-${seatIndex}`,
     name,
     seatIndex,
-    team: TEAMS[Math.floor(seatIndex / 2) % TEAMS.length],
+    team: (seatIndex % 2 === 0 ? "Alpha" : "Bravo") as Team,
     hand: [],
     isStarter: false,
   }));
@@ -122,10 +122,16 @@ export function dealForPlayerSlots(deck: JackpotCard[], playerSlots: PlayerSlot[
     throw new Error("Deal failed: expected an empty draw pile and exactly four cards per player.");
   }
 
-  // Seat 0 starts the clockwise pass chain with the temporary fifth card.
+  // Seat 0 starts the clockwise pass chain with an extra real card from an unselected suit.
   const starter = dealtPlayers[0];
   starter.isStarter = true;
-  starter.hand.push(createSpareToken(starter.id));
+  const usedSuits = Array.from(new Set(deck.map((c) => c.suit)));
+  const extraSuit = SUITS.find((s) => !usedSuits.includes(s)) ?? "star";
+  starter.hand.push({
+    id: `extra-${extraSuit}-1`,
+    suit: extraSuit,
+    number: 1,
+  });
   return { players: dealtPlayers, cardsPerPlayer: CARDS_PER_PLAYER, drawPile, starterPlayerId: starter.id };
 }
 
@@ -138,7 +144,7 @@ export function setupGame(numPlayers: 6 | 8): DealResult {
     id: `player-${seatIndex}`,
     name: `Player ${seatIndex + 1}`,
     seatIndex,
-    team: TEAMS[Math.floor(seatIndex / 2) % TEAMS.length],
+    team: (seatIndex % 2 === 0 ? "Alpha" : "Bravo") as Team,
     hand: [],
     isStarter: false,
   }));
@@ -153,14 +159,6 @@ export function dealInitialHands(deck: JackpotCard[], slots: PlayerSlot[] = crea
 export function setupJackpotRound(names: readonly string[] = DEFAULT_PLAYER_NAMES): DealResult {
   const slots = createPlayerSlots(names);
   return dealForPlayerSlots(createDeck(slots.length), slots);
-}
-
-function createSpareToken(playerId: string): JackpotCard {
-  return {
-    id: `spare-token-${playerId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    suit: "circle",
-    isPlaceholder: true,
-  };
 }
 
 function assertTableSize(numPlayers: number): asserts numPlayers is 4 | 6 | 8 {

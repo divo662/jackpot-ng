@@ -75,36 +75,63 @@ export function createMatch(names: readonly string[]): GameSnapshot {
   };
 }
 
+/**
+ * Arrange players around the table so teams alternate strictly (Alpha, Bravo, Alpha, Bravo...).
+ * This ensures that a player's left and right neighbors are always opponents, and their partner
+ * is seated directly opposite them across the table.
+ */
+export function orderRosterAlternating(
+  roster: Array<{ id: string; name: string; team: Team }>,
+): Array<{ id: string; name: string; team: Team }> {
+  if (roster.length <= 2) return roster;
+  const firstTeam = roster[0]?.team ?? "Alpha";
+  const team1 = roster.filter((p) => p.team === firstTeam);
+  const team2 = roster.filter((p) => p.team !== firstTeam);
+
+  if (team1.length === 0 || team2.length === 0) return roster;
+
+  const ordered: Array<{ id: string; name: string; team: Team }> = [];
+  const maxLen = Math.max(team1.length, team2.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < team1.length) ordered.push(team1[i]);
+    if (i < team2.length) ordered.push(team2[i]);
+  }
+  return ordered;
+}
+
 /** Build a server-dealable match from the authoritative room roster. */
 export function createRoomMatch(roster: Array<{ id: string; name: string; team: Team }>): GameSnapshot {
   if (![4, 6, 8].includes(roster.length)) throw new Error("Jackpot tables need 4, 6, or 8 players.");
-  const slots: PlayerSlot[] = roster.map((player, seatIndex) => ({
+  const orderedRoster = orderRosterAlternating(roster);
+  const slots: PlayerSlot[] = orderedRoster.map((player, seatIndex) => ({
     ...player,
     seatIndex,
     hand: [],
     isStarter: false,
   }));
-  const deck = createDeck(roster.length);
+  const deck = createDeck(orderedRoster.length);
   const deal = dealForPlayerSlots(deck, slots);
   const starter = deal.players.find((player) => player.id === deal.starterPlayerId);
   return {
     ...deal,
     activePlayerId: deal.starterPlayerId,
     passCount: 0,
-    log: [`Dealt ${deal.cardsPerPlayer} cards to each of ${roster.length} players. ${starter?.name ?? "Starter"} has the extra pass card and passes first.`],
+    log: [`Dealt ${deal.cardsPerPlayer} cards to each of ${orderedRoster.length} players. ${starter?.name ?? "Starter"} has the extra pass card and passes first.`],
   };
 }
 
-/** Real (non-placeholder) cards only. */
+/** Real cards in hand. */
 export function realCards(hand: JackpotCard[]): JackpotCard[] {
-  return hand.filter((card) => !card.isPlaceholder);
+  return hand;
 }
 
-/** Count of each suit in a hand (ignores placeholder). */
+/** Count of each suit in a hand. */
 export function suitCounts(hand: JackpotCard[]): Record<Suit, number> {
   const counts = Object.fromEntries(SUITS.map((suit) => [suit, 0])) as Record<Suit, number>;
-  for (const card of realCards(hand)) {
-    counts[card.suit] += 1;
+  for (const card of hand) {
+    if (card && SUITS.includes(card.suit)) {
+      counts[card.suit] += 1;
+    }
   }
   return counts;
 }
@@ -255,10 +282,7 @@ export function passCardByIndex(
  * while protecting a nest of 3+.
  */
 export function chooseAiPassCard(hand: JackpotCard[]): JackpotCard {
-  const spare = hand.find((card) => card.isPlaceholder);
-  if (spare) return spare;
-
-  const playable = realCards(hand);
+  const playable = hand;
   if (playable.length === 0) {
     throw new Error("AI has no cards to pass.");
   }

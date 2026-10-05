@@ -168,8 +168,8 @@ export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
     };
     if (!await saveRoom(room, previous.updatedAt)) room = await readRoom(previous.code);
   }
-  // Replace rounds dealt by the previous biased setup with a fair randomized deal.
-  if (room?.status === "table" && room.gameAuthoritative && room.gameSnapshot && room.dealVersion !== 5) {
+  // Replace rounds dealt by the previous setup with 100% real cards.
+  if (room?.status === "table" && room.gameAuthoritative && room.gameSnapshot && room.dealVersion !== 7) {
     const previous = room;
     room = {
       ...room,
@@ -180,7 +180,7 @@ export async function getSharedRoom(code: string): Promise<SharedRoom | null> {
       }))),
       scores: room.scores ?? emptyScores(),
       result: null,
-      dealVersion: 5,
+      dealVersion: 7,
       pendingSignalTruth: undefined,
       updatedAt: nextUpdatedAt(room),
     };
@@ -776,7 +776,7 @@ async function finishStrategy(room: SharedRoom): Promise<SharedRoom> {
       name: player.nickname,
       team: room.teams?.[player.id] ?? "Alpha",
     }))),
-    dealVersion: 5,
+    dealVersion: 7,
     scores: room.scores ?? emptyScores(),
     suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
     round: room.round ?? 1,

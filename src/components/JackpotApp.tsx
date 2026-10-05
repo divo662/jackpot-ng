@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { CardFan, WhotCard } from "@/components/WhotCard";
+import { CardFan, WhotCard, SuitMark, SUIT_LABELS } from "@/components/WhotCard";
 import { MiniMusicPlayer } from "@/components/MiniMusicPlayer";
 import { HowToPlayInteractive } from "@/components/HowToPlayInteractive";
 import landingBackground from "@/assets/images/home-bg.jpg";
 import mobileLandingBackground from "@/assets/images/mobile-bg.jpg";
-import { DEFAULT_PLAYER_NAMES, type PlayerSlot, type Team } from "@/lib/deck";
+import { DEFAULT_PLAYER_NAMES, type PlayerSlot, type Suit, type Team } from "@/lib/deck";
 import { DEFAULT_PREFERENCES, isSfxMuted, readPreferences, writePreferences, type GamePreferences } from "@/lib/preferences";
 import { playGameSound, type GameSound } from "@/lib/sound";
 import {
@@ -24,6 +24,7 @@ import {
   resolveJackpot,
   resolveSuspect,
   rotatePlayersForViewer,
+  suitCounts,
   SIGNAL_DECISION_WINDOW_MS,
   SUSPECT_ATTEMPTS_PER_TEAM,
 } from "@/lib/game";
@@ -142,6 +143,8 @@ export function JackpotApp() {
   const [busy, setBusy] = useState(false);
   const tableRef = useRef<HTMLDivElement>(null);
   const lastPassEventId = useRef("");
+  const seenPassIds = useRef<Set<string>>(new Set());
+  const hasInitializedPassTracking = useRef<boolean>(false);
   const lastReactionEventId = useRef("");
   const sharedRoomRevision = useRef(0);
   const roomRecoveryAttempted = useRef("");
@@ -215,8 +218,23 @@ export function JackpotApp() {
       const toY = toRect.top + toRect.height / 2 - tableRect.top;
       const dx = toX - fromX;
       const dy = toY - fromY;
-      setPassFlight({ id: `${event.id}-${Date.now()}`, fromX, fromY, dx, dy, midX: dx * 0.5, midY: dy * 0.5 - 72 });
-      window.setTimeout(() => setPassFlight(null), 680);
+
+      // Arc outward towards table rim so card passes circularly along the table perimeter
+      const cx = tableRect.width / 2;
+      const cy = tableRect.height / 2;
+      const mx = (fromX + toX) / 2;
+      const my = (fromY + toY) / 2;
+      const vx = mx - cx;
+      const vy = my - cy;
+      const dist = Math.hypot(vx, vy) || 1;
+      const offset = 48; // outward bow distance in pixels
+      const arcX = mx + (vx / dist) * offset;
+      const arcY = my + (vy / dist) * offset;
+      const midX = arcX - fromX;
+      const midY = arcY - fromY;
+
+      setPassFlight({ id: `${event.id}-${Date.now()}`, fromX, fromY, dx, dy, midX, midY });
+      window.setTimeout(() => setPassFlight(null), 750);
     });
   }, [preferences.animationsEnabled]);
 
@@ -464,10 +482,24 @@ export function JackpotApp() {
     if (shared.gameSnapshot !== undefined) {
       const snapshot = shared.gameSnapshot;
       const passEvents = snapshot?.passEvents ?? (snapshot?.lastPassEvent ? [snapshot.lastPassEvent] : []);
-      const previousPassIndex = passEvents.findIndex((event) => event.id === lastPassEventId.current);
-      for (const event of previousPassIndex >= 0 ? passEvents.slice(previousPassIndex + 1) : passEvents.slice(-1)) {
-        lastPassEventId.current = event.id;
-        if (Date.now() - event.createdAt < 5000) notifyCardPass(event);
+      if (!hasInitializedPassTracking.current) {
+        hasInitializedPassTracking.current = true;
+        for (const e of passEvents) {
+          seenPassIds.current.add(e.id);
+        }
+        if (passEvents.length > 0) {
+          lastPassEventId.current = passEvents[passEvents.length - 1].id;
+        }
+      } else {
+        const previousPassIndex = passEvents.findIndex((event) => event.id === lastPassEventId.current);
+        const newEvents = previousPassIndex >= 0 ? passEvents.slice(previousPassIndex + 1) : passEvents.slice(-1);
+        for (const event of newEvents) {
+          if (!seenPassIds.current.has(event.id)) {
+            seenPassIds.current.add(event.id);
+            lastPassEventId.current = event.id;
+            if (Date.now() - event.createdAt < 5000) notifyCardPass(event);
+          }
+        }
       }
       const signalEvents = snapshot?.publicSignals ?? [];
       const previousSignalIndex = signalEvents.findIndex((event) => event.id === lastSignalEventId.current);
@@ -622,25 +654,9 @@ export function JackpotApp() {
   const viewerPlayerId = session?.playerId ?? VIEWER_ID;
   const seated = useMemo(() => {
     if (!game) return [];
-    const rotated = rotatePlayersForViewer(game.players, viewerPlayerId);
-    const viewer = rotated[0];
-    const teammate = rotated.find((player) => player.id !== viewer?.id && player.team === viewer?.team);
-    if (!viewer || !teammate || rotated.length < 4) return rotated;
-
-    // Keep the viewer at the bottom and put a teammate at the opposite seat.
-    const seats = new Array<PlayerSlot>(rotated.length);
-    const oppositeSeat = Math.floor(rotated.length / 2);
-    seats[0] = viewer;
-    seats[oppositeSeat] = teammate;
-    const remaining = rotated.filter((player) => player.id !== viewer.id && player.id !== teammate.id);
-    for (let seat = 1, playerIndex = 0; seat < seats.length; seat += 1) {
-      if (!seats[seat]) seats[seat] = remaining[playerIndex++];
-    }
-    return seats;
+    return rotatePlayersForViewer(game.players, viewerPlayerId);
   }, [game, viewerPlayerId]);
-  const partner = seated[Math.floor(seated.length / 2)]?.team === seated[0]?.team
-    ? seated[Math.floor(seated.length / 2)]
-    : null;
+  const partner = seated.find((player) => player.team === seated[0]?.team && player.id !== seated[0]?.id) ?? null;
   const you = seated[0];
   const viewerTeam = room?.teams?.[session?.playerId ?? ""] ?? "Alpha";
   const partnerPlayer = room?.players.find(
@@ -657,6 +673,20 @@ export function JackpotApp() {
   const passReceiver = game && activePlayerIndex >= 0 ? game.players[(activePlayerIndex + 1) % game.players.length] : null;
   const isYourPass = game?.activePlayerId === viewerPlayerId;
   const yourFour = you ? findFourOfAKind(you.hand) : null;
+  const prevYourFour = useRef<Suit | null>(null);
+
+  useEffect(() => {
+    if (yourFour && !prevYourFour.current) {
+      playCue("success");
+      showTableToast(
+        "success",
+        "JACKPOT READY!",
+        `You have four ${SUIT_LABELS[yourFour]}s! Flash your secret signal to your partner!`,
+      );
+    }
+    prevYourFour.current = yourFour;
+  }, [yourFour, playCue, showTableToast]);
+
   const suspectAttemptsLeft = you
     ? room?.gameAuthoritative
       ? room.suspectAttemptsRemaining?.[you.team as "Alpha" | "Bravo"] ?? SUSPECT_ATTEMPTS_PER_TEAM
@@ -1177,6 +1207,7 @@ export function JackpotApp() {
       const next = passCard(game, fromId, cardId);
       setGame(next);
       if (next.lastPassEvent) {
+        seenPassIds.current.add(next.lastPassEvent.id);
         lastPassEventId.current = next.lastPassEvent.id;
         notifyCardPass(next.lastPassEvent);
       }
@@ -1239,16 +1270,6 @@ export function JackpotApp() {
   const onPassSelected = () => {
     if (!game || !selectedCardId || !isYourPass) return;
     if (room?.gameAuthoritative) {
-      if (passReceiver && you) {
-        notifyCardPass({
-          id: `opt-pass-${Date.now()}`,
-          fromPlayerId: you.id,
-          fromName: you.name,
-          toPlayerId: passReceiver.id,
-          toName: passReceiver.name,
-          createdAt: Date.now(),
-        });
-      }
       void requestServerGameAction("pass", selectedCardId);
       return;
     }
@@ -1596,6 +1617,7 @@ export function JackpotApp() {
         const next = passCard(snapshot, actor.id, choice.id);
         setGame(next);
         if (next.lastPassEvent) {
+          seenPassIds.current.add(next.lastPassEvent.id);
           lastPassEventId.current = next.lastPassEvent.id;
           notifyCardPass(next.lastPassEvent);
         }
@@ -3296,10 +3318,6 @@ export function JackpotApp() {
                       </div>
                     )}
                   </div>
-                  <span className="table-presence-tag">
-                    <span className="status-live-dot" aria-hidden="true" />
-                    <span>{room?.gameAuthoritative ? "Live" : "Practice"}</span>
-                  </span>
                 </div>
               </div>
 
@@ -4142,11 +4160,42 @@ function TableSeat({
         <span className="hand-count-badge" title={`${count} cards in hand`}>{count}</span>
       </div>
 
+      {/* Live Hand Suit Progress Tracker (for active viewer) */}
+      {isYou ? (
+        <div className="hand-suit-tracker" role="status" aria-label="Hand suit progress">
+          {Object.entries(suitCounts(player.hand))
+            .filter(([_, sCount]) => sCount > 0)
+            .sort((a, b) => b[1] - a[1])
+            .map(([suit, sCount]) => {
+              const isComplete = sCount >= 4;
+              const isClose = sCount === 3;
+              return (
+                <div
+                  key={suit}
+                  className={`suit-tracker-chip ${isComplete ? "is-complete" : isClose ? "is-close" : ""}`}
+                  title={`${sCount} of 4 ${SUIT_LABELS[suit as Suit]} cards`}
+                >
+                  <SuitMark suit={suit as Suit} size="sm" />
+                  <span className="suit-tracker-count">{sCount}/4</span>
+                  {isComplete ? <span className="suit-tracker-badge">JACKPOT!</span> : null}
+                </div>
+              );
+            })}
+        </div>
+      ) : null}
+
       {/* Hand Cards */}
       {showFaces ? (
-        <div className={`player-hand ${isYou ? "you-hand" : "peek-hand"} ${hasFourOfAKind ? "has-four-glow" : ""}`} data-hand-count={count}>
-          {player.hand.map((card) => {
-            const isMatch = isYou && hasFourOfAKind && !card.isPlaceholder;
+        <div className={`player-hand ${isYou ? "you-hand" : "peek-hand"} ${findFourOfAKind(player.hand) ? "has-four-glow" : ""}`} data-hand-count={count}>
+          {(isYou
+            ? [...player.hand].sort((a, b) => {
+                if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
+                return (a.number ?? 0) - (b.number ?? 0);
+              })
+            : player.hand
+          ).map((card) => {
+            const playerFourSuit = findFourOfAKind(player.hand);
+            const isMatch = isYou && Boolean(playerFourSuit) && card.suit === playerFourSuit;
             return (
               <WhotCard
                 key={card.id}
