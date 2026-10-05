@@ -7,7 +7,7 @@ import { MiniMusicPlayer } from "@/components/MiniMusicPlayer";
 import { HowToPlayInteractive } from "@/components/HowToPlayInteractive";
 import landingBackground from "@/assets/images/home-bg.jpg";
 import mobileLandingBackground from "@/assets/images/mobile-bg.jpg";
-import { DEFAULT_PLAYER_NAMES, type PlayerSlot, type Suit, type Team } from "@/lib/deck";
+import { type PlayerSlot, type Suit, type Team } from "@/lib/deck";
 import { DEFAULT_PREFERENCES, isSfxMuted, readPreferences, writePreferences, type GamePreferences } from "@/lib/preferences";
 import { playGameSound, type GameSound } from "@/lib/sound";
 import {
@@ -16,7 +16,6 @@ import {
   type ScoreBoard,
   applyRoundScore,
   chooseAiPassCard,
-  createMatch,
   emptyScores,
   findFourOfAKind,
   getPartner,
@@ -24,7 +23,6 @@ import {
   resolveJackpot,
   resolveSuspect,
   rotatePlayersForViewer,
-  suitCounts,
   SIGNAL_DECISION_WINDOW_MS,
   SUSPECT_ATTEMPTS_PER_TEAM,
 } from "@/lib/game";
@@ -158,6 +156,7 @@ export function JackpotApp() {
   const [signalCategoryFilter, setSignalCategoryFilter] = useState<SignalCategory | "All">("All");
   const [localSignalConfirmed, setLocalSignalConfirmed] = useState(false);
   const [tableLaunchCountdown, setTableLaunchCountdown] = useState<number | null>(null);
+  const hasLaunchedTableCountdown = useRef(false);
   const [suspectModalOpen, setSuspectModalOpen] = useState(false);
   const [suspectRevealing, setSuspectRevealing] = useState(false);
   const [jackpotModalOpen, setJackpotModalOpen] = useState(false);
@@ -484,6 +483,9 @@ export function JackpotApp() {
     if (!shared || shared.updatedAt <= sharedRoomRevision.current) return;
     sharedRoomRevision.current = shared.updatedAt;
     const cached = findRoom(roomCode);
+    const isSharedOnlineRoom = Boolean(roomCode || shared.code || pathname.startsWith("/room/") || pathname.startsWith("/join/"));
+    const cachedGame = cached?.game && Array.isArray(cached.game.players) && cached.game.players.length === shared.players.length ? cached.game : null;
+    const resolvedGame = shared.gameSnapshot !== undefined ? shared.gameSnapshot : (shared.status === "table" ? cachedGame : null);
     const syncedRoom: LocalRoom = {
       id: shared.id,
       code: shared.code,
@@ -499,8 +501,8 @@ export function JackpotApp() {
       teamPhase: shared.teamPhase,
       confirmationEndsAt: shared.confirmationEndsAt,
       strategyEndsAt: shared.strategyEndsAt,
-      game: shared.gameSnapshot !== undefined ? shared.gameSnapshot : cached?.game ?? null,
-      gameAuthoritative: shared.gameAuthoritative ?? cached?.gameAuthoritative,
+      game: resolvedGame,
+      gameAuthoritative: isSharedOnlineRoom ? true : Boolean(shared.gameAuthoritative ?? cached?.gameAuthoritative),
       scores: shared.scores ?? cached?.scores ?? emptyScores(),
       suspectAttemptsRemaining: shared.suspectAttemptsRemaining ?? cached?.suspectAttemptsRemaining,
       round: shared.round ?? cached?.round ?? 1,
@@ -554,6 +556,10 @@ export function JackpotApp() {
         if (Date.now() - event.createdAt < 4000) displayReaction(event);
       }
       setGame(snapshot);
+    } else if (resolvedGame) {
+      setGame(resolvedGame);
+    } else if (shared.status === "strategy" || shared.status === "lobby") {
+      setGame(null);
     }
     if (shared.scores) {
       setScores(shared.scores);
@@ -571,9 +577,11 @@ export function JackpotApp() {
       if (shared.status === "lobby" && (pathname.endsWith("/table") || pathname.endsWith("/signal") || pathname.endsWith("/result"))) {
         router.replace(`/room/${encodeURIComponent(roomCode)}`);
       } else if (shared.teamPhase === "strategy" && !pathname.endsWith("/signal")) {
-        router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
-      } else if (shared.teamPhase === "game" && !pathname.endsWith("/table")) {
-        if (screen === "signal" && tableLaunchCountdown !== null) {
+        if (!pathname.endsWith("/table") || !hasLaunchedTableCountdown.current) {
+          router.replace(`/room/${encodeURIComponent(roomCode)}/signal`);
+        }
+      } else if ((shared.teamPhase === "game" || shared.status === "table") && !pathname.endsWith("/table")) {
+        if (screen === "signal" && tableLaunchCountdown !== null && tableLaunchCountdown > 0) {
           // Allow the 3... 2... 1... countdown animation to complete smoothly before navigating
         } else {
           router.replace(`/room/${encodeURIComponent(roomCode)}/table`);
@@ -665,13 +673,6 @@ export function JackpotApp() {
   const selectedSignalMeta = getSignalMeta(selectedSignal);
   const currentTeamDraft = Object.keys(teamDraft).length ? teamDraft : room?.teams ?? {};
 
-  const playerNames = useMemo(
-    () =>
-      DEFAULT_PLAYER_NAMES.map((name, index) =>
-        index === 0 ? nickname.trim() || "You" : name,
-      ),
-    [nickname],
-  );
 
   // Lobby roster contains only browser sessions that actually joined this saved room.
   // The solo practice table fills remaining seats with bots only after the match begins.
@@ -721,6 +722,12 @@ export function JackpotApp() {
     prevYourFour.current = yourFour;
   }, [yourFour, playCue, showTableToast]);
 
+  useEffect(() => {
+    if (selectedCardId && you && !you.hand.some((c) => c.id === selectedCardId)) {
+      setSelectedCardId(null);
+    }
+  }, [selectedCardId, you]);
+
   const suspectAttemptsLeft = you
     ? room?.gameAuthoritative
       ? room.suspectAttemptsRemaining?.[you.team as "Alpha" | "Bravo"] ?? SUSPECT_ATTEMPTS_PER_TEAM
@@ -759,14 +766,17 @@ export function JackpotApp() {
     }
   }, [teamChat.length, screen]);
 
-  const canLaunchTable = room?.gameAuthoritative
-    ? (allTeamsLocked || room?.teamPhase === "game" || room?.status === "table")
-    : (allTeamsLocked || teamSignalLocked);
+  const canLaunchTable = Boolean(
+    allTeamsLocked ||
+    room?.teamPhase === "game" ||
+    room?.status === "table" ||
+    (strategySeconds === 0 && room?.teamPhase === "strategy")
+  );
 
   useEffect(() => {
-    if (screen === "signal" && canLaunchTable && tableLaunchCountdown === null) {
-      const timer = window.setTimeout(() => setTableLaunchCountdown(3), 0);
-      return () => window.clearTimeout(timer);
+    if (screen === "signal" && canLaunchTable && tableLaunchCountdown === null && !hasLaunchedTableCountdown.current) {
+      hasLaunchedTableCountdown.current = true;
+      setTableLaunchCountdown(3);
     }
   }, [screen, canLaunchTable, tableLaunchCountdown]);
 
@@ -774,6 +784,7 @@ export function JackpotApp() {
     if (screen !== "signal") {
       setLocalSignalConfirmed(false);
       setTableLaunchCountdown(null);
+      hasLaunchedTableCountdown.current = false;
       setTeamSignalLocked(false);
       setOtherTeamLocked(false);
       setAllTeamsLocked(false);
@@ -798,14 +809,11 @@ export function JackpotApp() {
   }, [screen, room?.strategyEndsAt]);
 
   useEffect(() => {
-    if (screen === "signal" && strategySeconds === 0 && tableLaunchCountdown === null) {
-      if (!room?.gameAuthoritative) {
-        beginRound(round);
-      } else {
-        navigate("table");
-      }
+    if (screen === "signal" && strategySeconds === 0 && tableLaunchCountdown === null && !hasLaunchedTableCountdown.current) {
+      hasLaunchedTableCountdown.current = true;
+      setTableLaunchCountdown(3);
     }
-  }, [screen, strategySeconds, tableLaunchCountdown, navigate, room?.gameAuthoritative, round]);
+  }, [screen, strategySeconds, tableLaunchCountdown]);
 
   useEffect(() => {
     if (tableLaunchCountdown === null) return;
@@ -817,15 +825,11 @@ export function JackpotApp() {
     }
     if (tableLaunchCountdown === 0) {
       const timer = window.setTimeout(() => {
-        if (!room?.gameAuthoritative) {
-          beginRound(round);
-        } else {
-          navigate("table");
-        }
+        navigate("table");
       }, 800);
       return () => window.clearTimeout(timer);
     }
-  }, [tableLaunchCountdown, navigate, room?.gameAuthoritative, round]);
+  }, [tableLaunchCountdown, navigate]);
 
   const sendLobbyMessage = (overrideText?: string) => {
     const text = (overrideText ?? chatDraft).trim();
@@ -1248,12 +1252,6 @@ export function JackpotApp() {
   const confirmSecretSignal = () => {
     setLocalSignalConfirmed(true);
     void updateTeamPrivate({ signal: selectedSignal, agree: true });
-    if (!room?.gameAuthoritative || teamMates.length <= 1) {
-      window.setTimeout(() => {
-        setTeamSignalLocked(true);
-        setAllTeamsLocked(true);
-      }, 1200);
-    }
   };
 
   const teamAction = async (action: string, extra: Record<string, unknown> = {}) => {
@@ -1285,21 +1283,6 @@ export function JackpotApp() {
     }
   };
 
-  const beginRound = (nextRound = round) => {
-    const next = createMatch(playerNames);
-    setGame(next);
-    setSelectedCardId(null);
-    setResult(null);
-    setLocalSuspectAttempts({ Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM, Charlie: SUSPECT_ATTEMPTS_PER_TEAM, Delta: SUSPECT_ATTEMPTS_PER_TEAM });
-    setBusy(false);
-    setStatus(`${next.players.find((player) => player.id === next.activePlayerId)?.name ?? "Player"} starts — pass a card clockwise.`);
-    if (room) {
-      const updatedRoom = { ...room, status: "table" as const, game: next, scores, result: null, round: nextRound };
-      saveRoom(updatedRoom);
-      setRoom(updatedRoom);
-    }
-    navigate("table");
-  };
 
   const triggerTableAutoReaction = useCallback((targetPlayerIds: string[], reactionId: string) => {
     if (!game) return;
@@ -3409,6 +3392,17 @@ export function JackpotApp() {
           </section>
         )}
 
+        {screen === "table" && (!game || !you) && (
+          <section className="hero-screen lobby-home jackpot-home jackpot-subpage" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "80vh" }}>
+            <div className="launch-box" style={{ background: "rgba(20, 14, 10, 0.95)", border: "1px solid rgba(245, 166, 35, 0.35)", borderRadius: "20px", padding: "40px", textAlign: "center", maxWidth: "420px" }}>
+              <div className="launch-pulse-ring" />
+              <span className="launch-lock-icon" style={{ fontSize: "2.5rem" }}>🎴</span>
+              <h2 className="launch-title" style={{ color: "#f5a623", margin: "16px 0 8px" }}>ENTERING TABLE</h2>
+              <p className="launch-subtitle" style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.95rem" }}>Synchronizing match seats and dealing cards...</p>
+            </div>
+          </section>
+        )}
+
         {screen === "table" && game && you && (
           <section className={`table-screen ${signalFlash ? "signal-flash" : ""} ${signalWindowActive ? "has-signal-pressure" : ""}`}>
             {/* Topbar with JACKPOT Raceboard */}
@@ -3591,7 +3585,7 @@ export function JackpotApp() {
                       isTeammate={player.id !== viewerPlayerId && player.team === you?.team}
                       peek={false}
                       selectedCardId={selectedCardId}
-                      canSelect={isYourPass && !busy}
+                      canSelect={!busy}
                       onSelectCard={(id) => {
                         playCue("card_click");
                         setSelectedCardId((prev) => (prev === id ? null : id));
@@ -4308,30 +4302,6 @@ function TableSeat({
         </div>
         <span className="hand-count-badge" title={`${count} cards in hand`}>{count}</span>
       </div>
-
-      {/* Live Hand Suit Progress Tracker (for active viewer) */}
-      {isYou ? (
-        <div className="hand-suit-tracker" role="status" aria-label="Hand suit progress">
-          {Object.entries(suitCounts(player.hand))
-            .filter(([_, sCount]) => sCount > 0)
-            .sort((a, b) => b[1] - a[1])
-            .map(([suit, sCount]) => {
-              const isComplete = sCount >= 4;
-              const isClose = sCount === 3;
-              return (
-                <div
-                  key={suit}
-                  className={`suit-tracker-chip ${isComplete ? "is-complete" : isClose ? "is-close" : ""}`}
-                  title={`${sCount} of 4 ${SUIT_LABELS[suit as Suit]} cards`}
-                >
-                  <SuitMark suit={suit as Suit} size="sm" />
-                  <span className="suit-tracker-count">{sCount}/4</span>
-                  {isComplete ? <span className="suit-tracker-badge">JACKPOT!</span> : null}
-                </div>
-              );
-            })}
-        </div>
-      ) : null}
 
       {/* Hand Cards */}
       {showFaces ? (

@@ -8683,12 +8683,19 @@ button {
     display: none !important;
   }
 
-  /* Seat You and Cards on Mobile (Positioned cleanly inside table) */
+  /* Seat You and Cards on Mobile (Positioned cleanly above bottom action dock) */
   .seat-you {
-    bottom: 12px !important;
+    position: absolute !important;
+    left: 50% !important;
+    bottom: calc(max(10px, env(safe-area-inset-bottom, 10px)) + 104px) !important;
+    transform: translateX(-50%) !important;
     width: max-content !important;
-    max-width: 95% !important;
-    gap: 2px !important;
+    max-width: 96% !important;
+    gap: 4px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    z-index: 10 !important;
   }
 
   .you-hand {
@@ -8697,18 +8704,33 @@ button {
     justify-content: center !important;
     width: max-content !important;
     max-width: 100% !important;
-    min-height: 72px !important;
+    min-height: 80px !important;
+    padding: 2px 4px 6px !important;
+    overflow: visible !important;
   }
 
   .you-hand .whot-card {
-    width: clamp(48px, 13vw, 56px) !important;
-    height: clamp(68px, 18.5vw, 80px) !important;
-    margin-left: clamp(-7px, -1.6vw, -4px) !important;
+    width: clamp(52px, 14vw, 64px) !important;
+    height: clamp(74px, 20vw, 92px) !important;
+    margin-left: clamp(-8px, -1.8vw, -4px) !important;
     aspect-ratio: 0.71 !important;
+    touch-action: manipulation !important;
+    cursor: pointer !important;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6) !important;
+    transition: transform 0.16s ease, box-shadow 0.16s ease !important;
+    border-radius: 8px !important;
   }
 
   .you-hand .whot-card:first-child {
     margin-left: 0 !important;
+  }
+
+  .you-hand .whot-card.selected,
+  .you-hand .whot-card.selected:nth-child(n) {
+    transform: translateY(-14px) rotate(0deg) !important;
+    z-index: 20 !important;
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.95), 0 8px 24px rgba(0, 0, 0, 0.75) !important;
+    border-color: #fbbf24 !important;
   }
 
   .player-plaque {
@@ -8811,23 +8833,44 @@ button {
   }
 
   .seat-you {
-    bottom: calc(max(4px, env(safe-area-inset-bottom, 4px)) + 68px) !important;
+    position: absolute !important;
+    left: 50% !important;
+    bottom: calc(max(6px, env(safe-area-inset-bottom, 6px)) + 84px) !important;
+    transform: translateX(-50%) !important;
     width: max-content !important;
-    max-width: 95% !important;
+    max-width: 96% !important;
+    gap: 2px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    z-index: 10 !important;
   }
 
   .you-hand {
-    min-height: 62px !important;
+    min-height: 66px !important;
+    padding: 1px 2px 4px !important;
+    overflow: visible !important;
   }
 
   .you-hand .whot-card {
-    width: clamp(44px, 12vw, 48px) !important;
-    height: clamp(62px, 17vw, 68px) !important;
-    margin-left: -5px !important;
+    width: clamp(46px, 12.5vw, 52px) !important;
+    height: clamp(65px, 17.5vw, 74px) !important;
+    margin-left: -6px !important;
+    touch-action: manipulation !important;
+    cursor: pointer !important;
+    transition: transform 0.16s ease, box-shadow 0.16s ease !important;
   }
 
   .you-hand .whot-card:first-child {
     margin-left: 0 !important;
+  }
+
+  .you-hand .whot-card.selected,
+  .you-hand .whot-card.selected:nth-child(n) {
+    transform: translateY(-10px) rotate(0deg) !important;
+    z-index: 20 !important;
+    box-shadow: 0 0 16px rgba(245, 158, 11, 0.95), 0 6px 18px rgba(0, 0, 0, 0.75) !important;
+    border-color: #fbbf24 !important;
   }
 
   .table-center-void {

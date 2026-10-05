@@ -426,6 +426,7 @@ export async function createSharedRoom(room: SharedRoom): Promise<boolean> {
   return saveRoom({
     ...room,
     code,
+    gameAuthoritative: true,
     playerTokens: { [hostId]: createPlayerToken() },
     tokenClaims: { [hostId]: true },
     updatedAt: Date.now(),
@@ -803,8 +804,11 @@ export async function getPrivateTeamRoom(code: string, playerId: string): Promis
   status?: SharedRoom["status"];
   error?: string;
 }> {
-  const room = await getSharedRoom(code);
+  let room = await getSharedRoom(code, true);
   if (!room) return { error: "This room is no longer available." };
+  if (room.status === "strategy" && room.strategyEndsAt && Date.now() >= room.strategyEndsAt) {
+    room = await finishStrategy(room);
+  }
   const team = room.teams?.[playerId];
   if (!team) return { error: "Your seat is not part of this team room." };
   const otherTeam: "Alpha" | "Bravo" = team === "Alpha" ? "Bravo" : "Alpha";
@@ -829,73 +833,91 @@ export async function getPrivateTeamRoom(code: string, playerId: string): Promis
 }
 
 export async function updatePrivateTeamRoom(code: string, playerId: string, input: { signal?: unknown; agree?: unknown; text?: unknown }): Promise<{ error?: string }> {
-  const room = await getSharedRoom(code);
-  if (!room) return { error: "This room is no longer available." };
-  if (room.status !== "strategy" || (room.strategyEndsAt && Date.now() >= room.strategyEndsAt)) return { error: "Team strategy has ended." };
-  const team = room.teams?.[playerId];
-  const sender = room.players.find((player) => player.id === playerId);
-  if (!team || !sender) return { error: "Join this room before sending team updates." };
-  const next: SharedRoom = { ...room, teamSignals: { ...room.teamSignals }, teamChats: { ...room.teamChats }, updatedAt: nextUpdatedAt(room) };
-  if (input.signal !== undefined) {
-    const allowed = ALL_SIGNAL_IDS;
-    if (typeof input.signal !== "string" || !allowed.includes(input.signal)) return { error: "Choose a signal from the signal library." };
-    if (room.teamSignalLocked?.[team]) return { error: "Your team has already agreed and locked its signal." };
-    if (room.teamSignals?.[team] !== input.signal) {
-      const teammates = room.players.filter((player) => room.teams?.[player.id] === team);
-      next.teamSignalAgreements = { ...room.teamSignalAgreements, [team]: Object.fromEntries(teammates.map((player) => [player.id, false])) };
-      next.teamSignalBy = { ...room.teamSignalBy, [team]: playerId };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const room = await getSharedRoom(code, true);
+    if (!room) return { error: "This room is no longer available." };
+    if (room.status !== "strategy" || (room.strategyEndsAt && Date.now() >= room.strategyEndsAt)) {
+      if (room.status === "strategy") {
+        await finishStrategy(room);
+      }
+      return { error: "Team strategy has ended." };
     }
-    next.teamSignals![team] = input.signal;
-  }
-  if (input.agree === true) {
-    if (!room.teamSignals?.[team]) return { error: "Choose a shared signal before agreeing." };
-    if (room.teamSignalLocked?.[team]) return {};
-    const agreements = { ...(room.teamSignalAgreements?.[team] ?? {}), [playerId]: true };
-    next.teamSignalAgreements = { ...room.teamSignalAgreements, [team]: agreements };
-    const teammates = room.players.filter((player) => room.teams?.[player.id] === team);
-    if (teammates.every((player) => agreements[player.id])) {
-      next.teamSignalLocked = { ...room.teamSignalLocked, [team]: true };
-      const otherTeam: "Alpha" | "Bravo" = team === "Alpha" ? "Bravo" : "Alpha";
-      const otherPlayers = room.players.filter((player) => room.teams?.[player.id] === otherTeam);
-      const otherTeamIsReady = otherPlayers.length === 0 || Boolean(next.teamSignalLocked?.[otherTeam]);
-      if (otherTeamIsReady) {
-        await finishStrategy(next);
-        return {};
+    const team = room.teams?.[playerId];
+    const sender = room.players.find((player) => player.id === playerId);
+    if (!team || !sender) return { error: "Join this room before sending team updates." };
+    const next: SharedRoom = { ...room, teamSignals: { ...room.teamSignals }, teamChats: { ...room.teamChats }, updatedAt: nextUpdatedAt(room) };
+    if (input.signal !== undefined) {
+      const allowed = ALL_SIGNAL_IDS;
+      if (typeof input.signal !== "string" || !allowed.includes(input.signal)) return { error: "Choose a signal from the signal library." };
+      if (room.teamSignalLocked?.[team]) return { error: "Your team has already agreed and locked its signal." };
+      if (room.teamSignals?.[team] !== input.signal) {
+        const teammates = room.players.filter((player) => room.teams?.[player.id] === team);
+        next.teamSignalAgreements = { ...room.teamSignalAgreements, [team]: Object.fromEntries(teammates.map((player) => [player.id, false])) };
+        next.teamSignalBy = { ...room.teamSignalBy, [team]: playerId };
+      }
+      next.teamSignals![team] = input.signal;
+    }
+    if (input.agree === true) {
+      if (!room.teamSignals?.[team]) return { error: "Choose a shared signal before agreeing." };
+      if (room.teamSignalLocked?.[team]) return {};
+      const agreements = { ...(room.teamSignalAgreements?.[team] ?? {}), [playerId]: true };
+      next.teamSignalAgreements = { ...room.teamSignalAgreements, [team]: agreements };
+      const teammates = room.players.filter((player) => room.teams?.[player.id] === team);
+      if (teammates.every((player) => agreements[player.id])) {
+        next.teamSignalLocked = { ...room.teamSignalLocked, [team]: true };
+        const otherTeam: "Alpha" | "Bravo" = team === "Alpha" ? "Bravo" : "Alpha";
+        const otherPlayers = room.players.filter((player) => room.teams?.[player.id] === otherTeam);
+        const otherTeamIsReady = otherPlayers.length === 0 || Boolean(next.teamSignalLocked?.[otherTeam]);
+        if (otherTeamIsReady) {
+          await finishStrategy(next);
+          return {};
+        }
       }
     }
+    if (input.text !== undefined) {
+      if (typeof input.text !== "string" || !input.text.trim()) return { error: "Write a team message first." };
+      const chat = next.teamChats![team] ?? [];
+      next.teamChats![team] = [...chat, { id: `message-${crypto.randomUUID()}`, playerId, nickname: sender.nickname, text: input.text.trim().slice(0, 280), createdAt: Date.now() }].slice(-100);
+    }
+    if (await saveRoom(next, room.updatedAt)) {
+      return {};
+    }
+    await new Promise((r) => setTimeout(r, 35 * (attempt + 1)));
   }
-  if (input.text !== undefined) {
-    if (typeof input.text !== "string" || !input.text.trim()) return { error: "Write a team message first." };
-    const chat = next.teamChats![team] ?? [];
-    next.teamChats![team] = [...chat, { id: `message-${crypto.randomUUID()}`, playerId, nickname: sender.nickname, text: input.text.trim().slice(0, 280), createdAt: Date.now() }].slice(-100);
-  }
-  if (!await saveRoom(next, room.updatedAt)) return { error: "Room changed just now. Please try again." };
-  return {};
+  return { error: "Room changed just now. Please try again." };
 }
 
 async function finishStrategy(room: SharedRoom): Promise<SharedRoom> {
-  const signals = { ...room.teamSignals };
-  for (const team of ["Alpha", "Bravo"] as const) signals[team] ??= "wave";
-  const next: SharedRoom = {
-    ...room,
-    teamSignals: signals,
-    teamSignalLocked: { ...room.teamSignalLocked, Alpha: true, Bravo: true },
-    teamPhase: "game",
-    status: "table",
-    gameSnapshot: createRoomMatch(room.players.map((player) => ({
-      id: player.id,
-      name: player.nickname,
-      team: room.teams?.[player.id] ?? "Alpha",
-    }))),
-    dealVersion: 7,
-    scores: room.scores ?? emptyScores(),
-    suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
-    round: room.round ?? 1,
-    result: null,
-    gameAuthoritative: true,
-    updatedAt: nextUpdatedAt(room),
-  };
-  return await saveRoom(next, room.updatedAt) ? next : (await readRoom(room.code) ?? next);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = attempt === 0 ? room : (await getSharedRoom(room.code, true) ?? room);
+    if (current.status === "table" && current.gameSnapshot) return current;
+    const signals = { ...current.teamSignals };
+    for (const team of ["Alpha", "Bravo"] as const) signals[team] ??= "wave";
+    const next: SharedRoom = {
+      ...current,
+      teamSignals: signals,
+      teamSignalLocked: { ...current.teamSignalLocked, Alpha: true, Bravo: true },
+      teamPhase: "game",
+      status: "table",
+      gameSnapshot: createRoomMatch(current.players.map((player) => ({
+        id: player.id,
+        name: player.nickname,
+        team: current.teams?.[player.id] ?? "Alpha",
+      }))),
+      dealVersion: 7,
+      scores: current.scores ?? emptyScores(),
+      suspectAttemptsRemaining: { Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM },
+      round: current.round ?? 1,
+      result: null,
+      gameAuthoritative: true,
+      updatedAt: nextUpdatedAt(current),
+    };
+    if (await saveRoom(next, current.updatedAt)) {
+      return next;
+    }
+    await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+  }
+  return (await readRoom(room.code, true)) ?? room;
 }
 
 export type SharedGameAction = { type: "pass"; playerId: string; cardId: string } | { type: "reaction"; playerId: string; reactionId: string } | { type: "jackpot" | "suspect" | "signal" | "fake-signal"; playerId: string };

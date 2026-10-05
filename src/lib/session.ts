@@ -165,6 +165,7 @@ export function createRoomSession(
       system: true,
     }],
     game: null,
+    gameAuthoritative: true,
     scores: { Alpha: 0, Bravo: 0, Charlie: 0, Delta: 0 },
     round: 1,
     result: null,
