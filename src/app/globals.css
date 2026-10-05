@@ -1981,6 +1981,7 @@ button {
   gap: 16px;
   margin: 0 auto;
   flex: 1;
+  min-width: 0;
   justify-content: center;
   position: relative;
   z-index: 2;
@@ -2113,7 +2114,7 @@ button {
 /* Main Split Grid */
 .lobby-main-grid {
   display: grid;
-  grid-template-columns: 1.15fr 0.95fr;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
   gap: 16px;
   width: 100%;
 }
@@ -2158,12 +2159,13 @@ button {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
 }
 
 .lobby-seat-cards-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2173,6 +2175,7 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   box-sizing: border-box;
   transition: all 0.18s ease;
 }
@@ -2311,6 +2314,7 @@ button {
   flex-direction: column;
   gap: 10px;
   height: 380px;
+  min-width: 0;
   box-sizing: border-box;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
 }
@@ -2389,6 +2393,7 @@ button {
   display: flex;
   flex-direction: column;
   max-width: 84%;
+  min-width: 0;
 }
 
 .chat-author-name {
@@ -2880,8 +2885,26 @@ button {
     gap: 12px;
   }
 
+  .lobby-seats-panel,
+  .lobby-chat-panel {
+    padding: 12px;
+  }
+
   .lobby-chat-panel {
     height: 260px;
+  }
+
+  .lobby-chat-input-bar {
+    flex-wrap: wrap;
+  }
+
+  .chat-input-well {
+    min-width: 0;
+  }
+
+  .chat-send-btn {
+    width: 100%;
+    justify-content: center;
   }
 
   .lobby-top-banner {
@@ -2902,10 +2925,20 @@ button {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 640px) {
   .lobby-seat-cards-grid {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .lobby-seat-card {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 8px;
+  }
+
+  .seat-status-chip {
+    margin-left: 46px;
   }
 
   .lobby-chat-panel {
