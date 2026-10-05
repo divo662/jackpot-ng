@@ -3,14 +3,15 @@ import path from "node:path";
 
 export const runtime = "nodejs";
 
+export const alt = "Jackpot - The Social Card Bluffing Party Game";
 export const size = {
-  width: 32,
-  height: 32,
+  width: 1200,
+  height: 630,
 };
 export const contentType = "image/png";
 
-export default function Icon() {
-  const imagePath = path.join(process.cwd(), "public", "favicon-32x32.png");
+export default async function Image() {
+  const imagePath = path.join(process.cwd(), "public", "twitter-image.png");
   const fileBuffer = fs.readFileSync(imagePath);
   return new Response(fileBuffer, {
     headers: {

@@ -65,23 +65,53 @@ export const metadata: Metadata = {
     title: "Jackpot | Social Card Bluffing & Secret Signal Party Game",
     description:
       "Play Jackpot online with friends! Team up, swap cards, transmit secret signals across the table, suspect rivals, and shout JACKPOT!",
-    url: "/",
+    url: baseUrl,
     siteName: "Jackpot",
     locale: "en_US",
     type: "website",
+    images: [
+      {
+        url: `${baseUrl}/og-image.png`,
+        secureUrl: `${baseUrl}/og-image.png`,
+        width: 1200,
+        height: 630,
+        alt: "Jackpot - The Multiplayer Secret Signal & Card Bluffing Party Game",
+        type: "image/png",
+      },
+      {
+        url: `${baseUrl}/og-image-square.png`,
+        secureUrl: `${baseUrl}/og-image-square.png`,
+        width: 600,
+        height: 600,
+        alt: "Jackpot Card Game",
+        type: "image/png",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Jackpot | Social Card Bluffing & Secret Signal Party Game",
     description:
       "Play Jackpot online with friends! Team up, swap cards, transmit secret signals across the table, suspect rivals, and shout JACKPOT!",
+    images: [`${baseUrl}/twitter-image.png`],
   },
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
       { url: "/favicon.ico", sizes: "any" },
     ],
-    apple: [{ url: "/apple-icon", sizes: "180x180", type: "image/png" }],
+    shortcut: ["/favicon.ico"],
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
+    other: [
+      {
+        rel: "apple-touch-icon-precomposed",
+        url: "/apple-touch-icon-precomposed.png",
+      },
+    ],
   },
   manifest: "/manifest.webmanifest",
   robots: {
@@ -104,6 +134,8 @@ const jsonLd = {
   url: baseUrl,
   description:
     "Fast-paced multiplayer card passing and social deduction party game. Transmit secret signals across the table, suspect rivals, and race to spell JACKPOT.",
+  image: `${baseUrl}/og-image.png`,
+  screenshot: `${baseUrl}/og-image.png`,
   applicationCategory: "GameApplication",
   genre: ["Card Game", "Party Game", "Social Deduction"],
   operatingSystem: "All",
