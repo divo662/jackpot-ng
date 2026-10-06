@@ -28,6 +28,30 @@
       "created_at": "2026-10-06T16:54:59.186Z",
       "sender": "ios",
       "is_cancelled": false
+    },
+    {
+      "id": "77026844-20c8-4ca2-954b-3d2dca342414",
+      "role": "agent",
+      "content": "I have implemented the **Jackpot Suspect Reveal mechanic**, fully integrated into the existing game flow and rules.\n\n### Summary of Changes\n\n1. **Suspect Rules & Timing Verification ([`src/lib/game.ts`](https://github.com/divo662/jackpot-ng/blob/main/src/lib/game.ts#L364-L440), [`src/lib/bot/agent.ts`](https://github.com/divo662/jackpot-ng/blob/main/src/lib/bot/agent.ts#L320-L338))**:\n   - Enforced the rule that an opponent can only be suspected after they have passed their 5th card (`handCount === 4`).\n   - If a player attempts to suspect an opponent holding a 5th card, an alert informs them to wait for the pass.\n   - Added [`chooseSuspectDefenseCards`](https://github.com/divo662/jackpot-ng/blob/main/src/lib/game.ts#L364-L382): when suspected, a player or bot defending without 4-of-a-kind selects two cards of different suits to prove the read was wrong; if holding 4-of-a-kind, any selected pair will match.\n   - Enhanced [`resolveSuspect`](https://github.com/divo662/jackpot-ng/blob/main/src/lib/game.ts#L384-L440) to support `selectedCardIds` to resolve the two revealed cards (`match = CAUGHT!`, `different = SUSPECT FAILED`).\n\n2. **Suspected Player UI ([`src/components/SuspectRevealOverlay.tsx`](https://github.com/divo662/jackpot-ng/blob/main/src/components/SuspectRevealOverlay.tsx))**:\n   - When the human player is suspected, displays the focused card:\n     - **YOU’VE BEEN SUSPECTED**\n     - *“[Caller Name] thinks you’ve got Jackpot.”*\n   - Displays the suspected player's current hand.\n   - Requires selecting exactly **two cards** before unlocking the **REVEAL CARDS** button.\n   - Selected cards lift, glow with red highlights, and display a checkmark badge.\n\n3. **Reveal & 3D Flip Animation Sequence ([`src/components/SuspectRevealOverlay.tsx`](https://github.com/divo662/jackpot-ng/blob/main/src/components/SuspectRevealOverlay.tsx#L125-L165), [`src/app/globals.css`](https://github.com/divo662/jackpot-ng/blob/main/src/app/globals.css#L13500-L13750))**:\n   - Dramatic pause with suspense audio cue.\n   - The 2 selected cards move to the center of the table and flip from back to front with a 3D perspective flip.\n   - **Information Isolation**: Only the player who made the suspect call sees the card faces (or the suspected player who selected them); outsiders see card backs. The rest of the hand remains hidden.\n   - Cards stay visible for **1.5 seconds**, then 3D-flip back to face-down.\n\n4. **Result Sequence ([`src/components/SuspectRevealOverlay.tsx`](https://github.com/divo662/jackpot-ng/blob/main/src/components/SuspectRevealOverlay.tsx#L280-L318))**:\n   - **Different Suits**:\n     - **SUSPECT FAILED** / *“Wrong read.”*\n     - Subtle shake and fade animation (`false_call` sound cue), burns 1 suspect attempt, and returns to normal table play.\n   - **Same Suit**:\n     - **CAUGHT!** / *“SUSPECT SUCCESSFUL”*\n     - Strong success sequence: screen pulse, golden/crimson glow, confetti burst (`caught` sound cue), awards +1 team point, and resolves the round.\n\n5. **AI Suspect Response & Integration ([`src/lib/bot/local-match.ts`](https://github.com/divo662/jackpot-ng/blob/main/src/lib/bot/local-match.ts#L189-L235), [`src/components/JackpotApp.tsx`](https://github.com/divo662/jackpot-ng/blob/main/src/components/JackpotApp.tsx#L2020-L2100))**:\n   - When an AI player is suspected, they automatically select two cards using their defense strategy (`chooseSuspectDefenseCards`), and the human caller sees the 3D reveal.\n   - When an AI bot suspects the human, table interaction pauses immediately and triggers the **YOU’VE BEEN SUSPECTED** overlay for the player.\n   - Normal table interactions, passes, and bot ticks are paused during the sequence and resume seamlessly.\n\n6. **Verification ([`tests/suspect-reveal.test.ts`](https://github.com/divo662/jackpot-ng/blob/main/tests/suspect-reveal.test.ts))**:\n   - All existing tests and new suspect reveal unit tests pass cleanly. `next build` compiles with 0 errors. Everything is saved and pushed automatically.",
+      "status": "completed",
+      "model": "gemini-3.8-flash-high",
+      "client_type": "gemini-bridge",
+      "parent_message_id": "5fc3562c-df1d-4839-bb6a-fdcbbe1ad899",
+      "created_at": "2026-10-06T17:13:54.130Z",
+      "sender": "macOS",
+      "is_cancelled": false
+    },
+    {
+      "id": "4cd95123-dad1-48a3-8e89-d95ac699ba17",
+      "role": "user",
+      "content": "I attached an image: images/photo-1791307503-1.jpg.\n\nOkay good I noticed in the profile card on the nav bar it shows Synced to neon why exposing information like that??",
+      "status": "pending",
+      "model": "gemini-3.8-flash-high",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-06T17:25:31.246Z",
+      "sender": "ios",
+      "is_cancelled": false
     }
   ]
 }

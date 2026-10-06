@@ -109,7 +109,7 @@ export function JackpotNavBar({
                     </svg>
                     VIP MEMBER
                   </span>
-                  <span className="vip-rank-pill">NEON SYNCED ✓</span>
+                  <span className="vip-rank-pill">CLOUD SYNCED ✓</span>
                 </div>
 
                 <div className="vip-player-profile-row">

@@ -144,7 +144,7 @@ export function JackpotApp() {
     }
     const dbAcc = await fetchAccountFromDb(cleanUser);
     if (!dbAcc) {
-      showTableToast("error", "Account Not Found", `No account found for "${cleanUser}" in Neon DB.`);
+      showTableToast("error", "Account Not Found", `No account found for "${cleanUser}".`);
       return;
     }
     setAccount(dbAcc);
@@ -155,7 +155,7 @@ export function JackpotApp() {
     setSelectedTitle(dbAcc.title);
     setSelectedPartnerId(dbAcc.preferredPartnerId);
     setAuthModalOpen(false);
-    showTableToast("success", "Welcome Back!", `Logged in as ${dbAcc.username}. Stats synced from Neon DB.`);
+    showTableToast("success", "Welcome Back!", `Logged in as ${dbAcc.username}. Stats synced successfully.`);
   };
   const privateRoom = true;
   const [room, setRoom] = useState<LocalRoom | null>(null);
@@ -1606,7 +1606,7 @@ export function JackpotApp() {
     setAuthModalOpen(false);
     setSessionSummaryOpen(false);
     setProfileSetupOpen(true);
-    showTableToast("success", "Account Created!", "Your guest match records have been saved to your permanent Neon DB profile.");
+    showTableToast("success", "Account Created!", "Your guest match records have been saved to your permanent cloud profile.");
   };
 
   const handleSaveProfile = () => {
@@ -5290,7 +5290,7 @@ export function JackpotApp() {
                 <span>⭐</span> Save Your Jackpot Record
               </strong>
               <p className="pitch-desc">
-                Create a free account to preserve these stats in Neon DB, unlock 6 AI partner personalities, and customize your profile!
+                Create a free account to preserve these stats online, unlock 6 AI partner personalities, and customize your profile!
               </p>
             </div>
 
@@ -5322,7 +5322,7 @@ export function JackpotApp() {
         </div>
       )}
 
-      {/* 4. Account Registration & Login Modal (Neon DB Synced) */}
+      {/* 4. Account Registration & Login Modal */}
       {authModalOpen && (
         <div className="table-modal-backdrop" role="dialog" aria-modal="true">
           <div className="table-modal-card account-modal-card">
@@ -5360,8 +5360,8 @@ export function JackpotApp() {
 
             <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.75)", marginBottom: "16px" }}>
               {authMode === "register"
-                ? "Your guest gameplay record will automatically migrate into your permanent Neon DB profile!"
-                : "Enter your username and PIN to load your permanent profile and stats from Neon DB."}
+                ? "Your guest gameplay record will automatically migrate into your permanent profile!"
+                : "Enter your username and PIN to load your permanent profile and stats."}
             </p>
 
             <form
