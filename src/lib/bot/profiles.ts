@@ -109,7 +109,7 @@ const DIFFICULTY_BASES: Record<BotDifficulty, DifficultyBase> = {
     resignalAfterMs: 8000,
     maxSignals: 3,
     ambientDecoysPerMinute: 1.2,
-    suspectReactionMs: [1600, 3200],
+    suspectReactionMs: [3000, 5200],
     evidenceHalfLifeMs: 8000,
     learnAcrossRounds: true,
     memoryRetention: 0.6,
@@ -135,18 +135,19 @@ const DIFFICULTY_BASES: Record<BotDifficulty, DifficultyBase> = {
     resignalAfterMs: 7000,
     maxSignals: 3,
     ambientDecoysPerMinute: 2.0,
-    suspectReactionMs: [900, 2200],
+    // Slow enough that a partner can answer a signal first; keeps Hard tough but not rigged-feeling.
+    suspectReactionMs: [2800, 4800],
     evidenceHalfLifeMs: 10000,
     learnAcrossRounds: true,
     memoryRetention: 0.85,
     cardCounting: true,
     perceptionNoise: 0.05,
     suspectCurve: [
-      { at: 0.75, p: 0.85 },
-      { at: 0.55, p: 0.4 },
-      { at: 0.35, p: 0.06 },
+      { at: 0.8, p: 0.7 },
+      { at: 0.6, p: 0.3 },
+      { at: 0.4, p: 0.04 },
     ],
-    suspectCooldownMs: 4500,
+    suspectCooldownMs: 7000,
   },
 };
 
