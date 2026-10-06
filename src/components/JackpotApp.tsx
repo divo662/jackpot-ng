@@ -71,7 +71,6 @@ import {
 import { type BotDifficulty } from "@/lib/bot/profiles";
 import { type BotArchetypeId, BOT_ARCHETYPES, getArchetype, ALL_ARCHETYPE_IDS } from "@/lib/bot/archetypes";
 import { SettingsPageContent } from "@/components/SettingsPageContent";
-import { InstallPrompt } from "@/components/InstallPrompt";
 
 export type Screen = "home" | "create" | "join" | "lobby" | "teams" | "signal" | "table" | "result" | "howto" | "settings";
 
@@ -2832,7 +2831,6 @@ export function JackpotApp() {
                   </div>
                 )}
 
-                <InstallPrompt />
               </div>
 
               {/* Floating Quick-Menu Menu on Right - Tutorials & Settings */}
@@ -2942,7 +2940,6 @@ export function JackpotApp() {
                 onStartOfflinePlay={() => handlePlayOffline()}
                 onBack={() => navigate("home")}
               />
-              <InstallPrompt />
             </div>
           </section>
         )}
