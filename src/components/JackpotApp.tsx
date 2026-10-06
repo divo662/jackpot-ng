@@ -1579,22 +1579,16 @@ export function JackpotApp() {
   };
 
   const startTutorialMatch = () => {
-    setIsTutorialMatch(true);
-    setBotDifficulty("easy");
-    setSelectedPartnerId("strategist");
-    setSelectedSignal("thumbs-up");
-    setTutorialStep("strategy_room_intro");
-    startLocalPracticeMatch("thumbs-up", "strategist", 1);
+    // Interactive tutorial suspended
+    setIsTutorialMatch(false);
+    setTutorialStep(null);
+    startLocalPracticeMatch(undefined, account?.preferredPartnerId ?? (isGuest ? "strategist" : selectedPartnerId));
   };
 
   const handlePlayOffline = () => {
-    if (isGuest && !isTutorialCompleted()) {
-      startTutorialMatch();
-    } else {
-      setIsTutorialMatch(false);
-      setTutorialStep(null);
-      startLocalPracticeMatch(undefined, account?.preferredPartnerId ?? (isGuest ? "strategist" : selectedPartnerId));
-    }
+    setIsTutorialMatch(false);
+    setTutorialStep(null);
+    startLocalPracticeMatch(undefined, account?.preferredPartnerId ?? (isGuest ? "strategist" : selectedPartnerId));
   };
 
   const handleRegisterAccount = () => {
@@ -2845,14 +2839,6 @@ export function JackpotApp() {
                     </svg>
                   </span>
                   Settings
-                </button>
-                <button type="button" className="quick-menu-item" onClick={() => startTutorialMatch()}>
-                  <span className="menu-svg-icon" aria-hidden="true">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                      <polygon points="5 3 19 12 5 21 5 3" />
-                    </svg>
-                  </span>
-                  Interactive Tutorial
                 </button>
                 <button type="button" className="quick-menu-item" onClick={() => navigate("howto")}>
                   <span className="menu-svg-icon" aria-hidden="true">
