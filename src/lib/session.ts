@@ -119,7 +119,7 @@ export function writeRooms(rooms: LocalRoom[]): void {
 }
 
 export function saveRoom(room: LocalRoom): LocalRoom {
-  const rooms = readRooms().filter((entry) => entry && entry.id !== room.id);
+  const rooms = readRooms().filter((entry) => entry && entry.id !== room.id && (room.code !== "PRACTICE" || entry.code !== "PRACTICE"));
   const next = { ...room, updatedAt: Date.now() };
   writeRooms([...rooms, next]);
   return next;
@@ -129,6 +129,9 @@ export function findRoom(code?: string | null): LocalRoom | null {
   if (!code || typeof code !== "string") return null;
   const clean = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!clean) return null;
+  if (clean === "PRACTICE") {
+    return readRooms().find((room) => typeof room?.code === "string" && room.code.replace(/[^A-Z0-9]/g, "") === "PRACTICE" && (room.players?.length ?? 0) >= 4) ?? null;
+  }
   return readRooms().find((room) => typeof room?.code === "string" && room.code.replace(/[^A-Z0-9]/g, "") === clean) ?? null;
 }
 
@@ -175,6 +178,57 @@ export function createRoomSession(
   const session = { playerId, nickname: player.nickname, roomCode: code, updatedAt: now };
   writeSession(session);
   return { session, room };
+}
+
+export function createPracticeRoom(
+  hostNickname: string,
+  hostPlayerId: string,
+  botNames: { partnerName?: string; opp1Name?: string; opp2Name?: string } = {}
+): LocalRoom {
+  const hostName = normalizePlayerName(hostNickname);
+  const now = Date.now();
+  const partnerName = botNames.partnerName ?? "Michael (Bot)";
+  const opp1Name = botNames.opp1Name ?? "Fatima (Bot)";
+  const opp2Name = botNames.opp2Name ?? "Chidi (Bot)";
+
+  return {
+    id: "room-practice",
+    code: "PRACTICE",
+    isPrivate: true,
+    maxPlayers: 4,
+    status: "lobby",
+    hostPlayerId,
+    players: [
+      { id: hostPlayerId, nickname: hostName, isAdmin: true, isReady: true, joinedAt: now },
+      { id: "player-east", nickname: opp1Name, isAdmin: false, isReady: true, joinedAt: now + 10 },
+      { id: "player-north", nickname: partnerName, isAdmin: false, isReady: true, joinedAt: now + 20 },
+      { id: "player-west", nickname: opp2Name, isAdmin: false, isReady: true, joinedAt: now + 30 },
+    ],
+    chat: [
+      { id: "pchat-0", playerId: "system", nickname: "SYSTEM", text: "Welcome to Offline Mode! Play alongside your chosen AI partner against opposing AI bots.", createdAt: now - 3000, system: true },
+      { id: "pchat-1", playerId: "player-north", nickname: partnerName, text: "Ready to partner up! Let's watch our cards and win this.", createdAt: now - 2000 },
+      { id: "pchat-2", playerId: "player-east", nickname: opp1Name, text: "We're seated and ready. Good luck!", createdAt: now - 1000 },
+    ],
+    teams: {
+      [hostPlayerId]: "Alpha",
+      "player-north": "Alpha",
+      "player-east": "Bravo",
+      "player-west": "Bravo",
+    },
+    teamAcceptances: {
+      [hostPlayerId]: true,
+      "player-north": true,
+      "player-east": true,
+      "player-west": true,
+    },
+    teamPhase: "lobby",
+    game: null,
+    gameAuthoritative: false,
+    scores: { Alpha: 0, Bravo: 0, Charlie: 0, Delta: 0 },
+    round: 1,
+    result: null,
+    updatedAt: now,
+  };
 }
 
 export function joinRoomSession(

@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request, { params }: RouteContext) {
   const { roomCode } = await params;
-  let body: { playerId?: unknown; type?: unknown; cardId?: unknown; reactionId?: unknown };
+  let body: { playerId?: unknown; type?: unknown; cardId?: unknown; reactionId?: unknown; targetPlayerId?: unknown };
   try { body = await request.json(); } catch { return Response.json({ error: "That game action was not valid." }, { status: 400 }); }
   if (typeof body.playerId !== "string" || !["pass", "jackpot", "suspect", "signal", "fake-signal", "reaction", "restart", "next-round", "rematch"].includes(String(body.type))) {
     return Response.json({ error: "That game action is not available." }, { status: 400 });
@@ -34,7 +34,9 @@ export async function POST(request: Request, { params }: RouteContext) {
     ? { type: "pass" as const, playerId: body.playerId, cardId: body.cardId as string }
     : body.type === "reaction"
       ? { type: "reaction" as const, playerId: body.playerId, reactionId: body.reactionId as string }
-      : { type: body.type as "jackpot" | "suspect" | "signal" | "fake-signal", playerId: body.playerId };
+      : body.type === "suspect"
+        ? { type: "suspect" as const, playerId: body.playerId, targetPlayerId: typeof body.targetPlayerId === "string" ? body.targetPlayerId : undefined }
+        : { type: body.type as "jackpot" | "signal" | "fake-signal", playerId: body.playerId };
   const result = await performSharedGameAction(roomCode, action as SharedGameAction);
   if (!result.room) return Response.json({ error: result.error }, { status: 409 });
   return Response.json({

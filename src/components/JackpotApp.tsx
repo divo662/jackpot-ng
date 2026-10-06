@@ -4,6 +4,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type
 import { usePathname, useRouter } from "next/navigation";
 import { CardFan, WhotCard, SuitMark, SUIT_LABELS } from "@/components/WhotCard";
 import { MiniMusicPlayer } from "@/components/MiniMusicPlayer";
+import { JackpotNavBar } from "@/components/JackpotNavBar";
 import { HowToPlayInteractive } from "@/components/HowToPlayInteractive";
 import landingBackground from "@/assets/images/home-bg.jpg";
 import mobileLandingBackground from "@/assets/images/mobile-bg.jpg";
@@ -28,6 +29,7 @@ import {
 } from "@/lib/game";
 import {
   createPlayerId,
+  createPracticeRoom,
   createRoomSession,
   findRoom,
   leaveRoomSession,
@@ -43,8 +45,33 @@ import {
 } from "@/lib/session";
 
 import { GAME_SIGNALS, getSignalMeta, type SignalCategory } from "@/lib/signals";
+import { LocalMatch } from "@/lib/bot/local-match";
+import {
+  readAccount,
+  saveAccount,
+  readGuestStats,
+  recordGuestStat,
+  isTutorialCompleted,
+  setTutorialCompleted,
+  resetTutorial,
+  isFirstVisit,
+  setFirstVisitCompleted,
+  migrateGuestToAccount,
+  fetchAccountFromDb,
+  AVAILABLE_AVATARS,
+  AVAILABLE_TITLES,
+  type UserAccount,
+  type PlayerStats,
+} from "@/lib/account";
+import {
+  TUTORIAL_COACHMARKS,
+  type TutorialStep,
+} from "@/lib/tutorial";
+import { type BotDifficulty } from "@/lib/bot/profiles";
+import { type BotArchetypeId, BOT_ARCHETYPES, getArchetype, ALL_ARCHETYPE_IDS } from "@/lib/bot/archetypes";
+import { SettingsPageContent } from "@/components/SettingsPageContent";
 
-export type Screen = "home" | "create" | "join" | "lobby" | "teams" | "signal" | "table" | "result" | "howto";
+export type Screen = "home" | "create" | "join" | "lobby" | "teams" | "signal" | "table" | "result" | "howto" | "settings";
 
 const signalLibrary = GAME_SIGNALS;
 
@@ -58,6 +85,9 @@ const quickReactions = [
   { id: "fire", symbol: "🔥", label: "Fire" },
   { id: "shock", symbol: "😱", label: "Shock" },
   { id: "clap", symbol: "👏", label: "Clap" },
+  { id: "more_play", symbol: "🃏", label: "More play!" },
+  { id: "e_don_cast", symbol: "🚨", label: "E don cast!" },
+  { id: "na_lie", symbol: "🙅‍♂️", label: "Na lie!" },
 ] as const;
 
 type TableToastKind = "info" | "success" | "warning" | "error" | "game";
@@ -88,6 +118,44 @@ export function JackpotApp() {
   const [hydrated, setHydrated] = useState(false);
   const [nickname, setNickname] = useState("");
   const [roomCode, setRoomCode] = useState("");
+  const [account, setAccount] = useState<UserAccount | null>(null);
+  const isGuest = !account;
+  const [firstVisitModalOpen, setFirstVisitModalOpen] = useState(false);
+  const [firstVisitName, setFirstVisitName] = useState("");
+  const [isTutorialMatch, setIsTutorialMatch] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState<TutorialStep | null>(null);
+  const [sessionSummaryOpen, setSessionSummaryOpen] = useState(false);
+  const [statsPreviewVisible, setStatsPreviewVisible] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [profileSetupOpen, setProfileSetupOpen] = useState(false);
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [selectedAvatar, setSelectedAvatar] = useState("👑");
+  const [selectedTitle, setSelectedTitle] = useState("Rookie Partner");
+  const [authMode, setAuthMode] = useState<"register" | "login">("register");
+
+  const handleLoginAccount = async () => {
+    const cleanUser = normalizePlayerName(authUsername.trim());
+    if (!cleanUser) {
+      showTableToast("error", "Username Required", "Please enter your player username.");
+      return;
+    }
+    const dbAcc = await fetchAccountFromDb(cleanUser);
+    if (!dbAcc) {
+      showTableToast("error", "Account Not Found", `No account found for "${cleanUser}" in Neon DB.`);
+      return;
+    }
+    setAccount(dbAcc);
+    saveAccount(dbAcc);
+    setNickname(dbAcc.username);
+    setProfileDraft(dbAcc.username);
+    setSelectedAvatar(dbAcc.avatar);
+    setSelectedTitle(dbAcc.title);
+    setSelectedPartnerId(dbAcc.preferredPartnerId);
+    setAuthModalOpen(false);
+    showTableToast("success", "Welcome Back!", `Logged in as ${dbAcc.username}. Stats synced from Neon DB.`);
+  };
   const privateRoom = true;
   const [room, setRoom] = useState<LocalRoom | null>(null);
   const [session, setSession] = useState<LocalSession | null>(null);
@@ -107,6 +175,7 @@ export function JackpotApp() {
   const [scores, setScores] = useState<ScoreBoard>(() => emptyScores());
   const [round, setRound] = useState(1);
   const [result, setResult] = useState<RoundResult | null>(null);
+  const [roundSignalPickOpen, setRoundSignalPickOpen] = useState(false);
   const [localSuspectAttempts, setLocalSuspectAttempts] = useState<Record<Team, number>>({ Alpha: SUSPECT_ATTEMPTS_PER_TEAM, Bravo: SUSPECT_ATTEMPTS_PER_TEAM, Charlie: SUSPECT_ATTEMPTS_PER_TEAM, Delta: SUSPECT_ATTEMPTS_PER_TEAM });
   const [status, setStatus] = useState("");
   const [teamDraft, setTeamDraft] = useState<Record<string, "Alpha" | "Bravo">>({});
@@ -141,6 +210,7 @@ export function JackpotApp() {
     }>
   >([]);
   const [busy, setBusy] = useState(false);
+  const localMatchRef = useRef<LocalMatch | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const lastPassEventId = useRef("");
   const seenPassIds = useRef<Set<string>>(new Set());
@@ -157,12 +227,45 @@ export function JackpotApp() {
   const [localSignalConfirmed, setLocalSignalConfirmed] = useState(false);
   const [tableLaunchCountdown, setTableLaunchCountdown] = useState<number | null>(null);
   const hasLaunchedTableCountdown = useRef(false);
+  const playedResultSoundRef = useRef<string | null>(null);
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("jackpot_bot_diff");
+        if (saved === "easy" || saved === "normal" || saved === "hard") return saved;
+      } catch {}
+    }
+    return "normal";
+  });
+  const [selectedPartnerId, setSelectedPartnerId] = useState<BotArchetypeId>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("jackpot_bot_partner");
+        if (saved && saved in BOT_ARCHETYPES) return saved as BotArchetypeId;
+      } catch {}
+    }
+    return "strategist";
+  });
+  const [offlineTeamName, setOfflineTeamName] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("jackpot_offline_team_name");
+        if (saved && saved.trim()) return saved.trim().slice(0, 18);
+      } catch {}
+    }
+    return "Alpha";
+  });
+  const [matchRoster, setMatchRoster] = useState<{
+    partner: ReturnType<typeof getArchetype>;
+    opponents: [ReturnType<typeof getArchetype>, ReturnType<typeof getArchetype>];
+  } | null>(null);
   const [suspectModalOpen, setSuspectModalOpen] = useState(false);
   const [suspectRevealing, setSuspectRevealing] = useState(false);
   const [jackpotModalOpen, setJackpotModalOpen] = useState(false);
   const [jackpotCelebrating, setJackpotCelebrating] = useState(false);
   const [roundTransitionOpen, setRoundTransitionOpen] = useState(false);
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
+  const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const [matchInterruption, setMatchInterruption] = useState<LocalRoom["matchInterruption"]>(null);
   const [autoReturnCountdown, setAutoReturnCountdown] = useState<number | null>(null);
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(60);
@@ -300,6 +403,8 @@ export function JackpotApp() {
 
   const screen: Screen = pathname === "/how-to"
     ? "howto"
+    : pathname === "/settings"
+      ? "settings"
     : pathname === "/create"
       ? "create"
       : pathname === "/join" || pathname.startsWith("/join/")
@@ -334,16 +439,40 @@ export function JackpotApp() {
       table: `${roomPath}/table`,
       result: `${roomPath}/result`,
       howto: "/how-to",
+      settings: "/settings",
     };
     router.push(paths[destination]);
   }, [roomCode, router]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      const savedAccount = readAccount();
+      if (savedAccount) {
+        setAccount(savedAccount);
+        setNickname(savedAccount.username);
+        setProfileDraft(savedAccount.username);
+        setSelectedPartnerId(savedAccount.preferredPartnerId);
+        setSelectedAvatar(savedAccount.avatar);
+        setSelectedTitle(savedAccount.title);
+
+        void fetchAccountFromDb(savedAccount.username).then((dbAcc) => {
+          if (dbAcc) {
+            setAccount(dbAcc);
+            saveAccount(dbAcc);
+          }
+        });
+      } else {
+        if (isFirstVisit()) {
+          setFirstVisitModalOpen(true);
+        }
+      }
+
       const savedSession = readSession();
-      const guestName = savedSession?.nickname ?? window.localStorage.getItem("jackpot:guest-name:v1") ?? "";
-      setProfileDraft(guestName);
-      setNickname(guestName);
+      const guestName = savedAccount?.username ?? savedSession?.nickname ?? window.localStorage.getItem("jackpot:guest-name:v1") ?? "";
+      if (!savedAccount) {
+        setProfileDraft(guestName);
+        setNickname(guestName);
+      }
       setPreferences(readPreferences());
 
       // Fetch persistent database profile (tied to httpOnly cookie jackpot_player_id)
@@ -374,7 +503,8 @@ export function JackpotApp() {
       const routeCode = pathname.startsWith("/room/")
         ? decodeURIComponent(pathname.split("/")[2] ?? "")
         : "";
-      const savedRoom = routeCode ? findRoom(routeCode) : null;
+      const isPracticeRoute = routeCode.toLowerCase() === "practice";
+      const savedRoom = routeCode && !isPracticeRoute ? findRoom(routeCode) : null;
 
       const savedSignal = window.localStorage.getItem("jackpot:signal:v1");
       if (savedSignal && signalLibrary.some((signal) => signal.id === savedSignal)) setSelectedSignal(savedSignal);
@@ -386,6 +516,37 @@ export function JackpotApp() {
         }
       } else if (routeCode) {
         setRoomCode(routeCode);
+      }
+      if (isPracticeRoute) {
+        const pName = guestName || "You";
+        const pid = savedSession?.playerId ?? VIEWER_ID;
+        let practiceRoom = findRoom("PRACTICE") ?? findRoom("practice");
+        if (!practiceRoom || (practiceRoom.players?.length ?? 0) < 4) {
+          practiceRoom = createPracticeRoom(pName, pid);
+          saveRoom(practiceRoom);
+        }
+        setRoom(practiceRoom);
+        setRoomCode("practice");
+        setTeamDraft(practiceRoom.teams ?? {});
+        if (practiceRoom.scores) setScores(practiceRoom.scores);
+        if (practiceRoom.round) setRound(practiceRoom.round);
+        if (practiceRoom.result) setResult(practiceRoom.result);
+
+        if (pathname.endsWith("/table") && !localMatchRef.current) {
+          const match = new LocalMatch(
+            {
+              humanPlayerName: pName,
+              humanPlayerId: pid,
+              humanTeamSignal: savedSignal || "thumbs-up",
+              difficulty: botDifficulty,
+              partnerArchetype: selectedPartnerId,
+            },
+            Date.now()
+          );
+          localMatchRef.current = match;
+          setMatchRoster(match.getMatchRoster());
+          setGame({ ...match.state.game });
+        }
       }
       if (savedRoom) {
         setRoom(savedRoom);
@@ -569,7 +730,7 @@ export function JackpotApp() {
     if (shared.round !== undefined) setRound(shared.round);
     if (shared.result !== undefined) {
       setResult(shared.result);
-      if (shared.result && shared.result.kind !== "suspect" && cached?.result?.title !== shared.result.title) {
+      if (shared.status !== "result" && shared.result && shared.result.kind !== "suspect" && cached?.result?.title !== shared.result.title) {
         showTableToast(shared.result.valid ? "success" : "warning", shared.result.title, shared.result.detail);
       }
     }
@@ -596,7 +757,7 @@ export function JackpotApp() {
 
   // Real-time EventSource connection with instant push + lightweight adaptive polling
   useEffect(() => {
-    if (!hydrated || !roomCode || !pathname.startsWith("/room/") || !session?.playerId) return;
+    if (!hydrated || !roomCode || roomCode.toLowerCase() === "practice" || !pathname.startsWith("/room/") || !session?.playerId) return;
     let active = true;
     let eventSource: EventSource | null = null;
 
@@ -697,30 +858,43 @@ export function JackpotApp() {
   const partnerPlayer = room?.players.find(
     (p) => room.teams?.[p.id] === viewerTeam && p.id !== session?.playerId
   );
-  const partnerName = partnerPlayer?.nickname ?? teamMates.find((m) => m.id !== session?.playerId)?.nickname ?? "Michael";
+  const currentPartnerArchetype = BOT_ARCHETYPES[selectedPartnerId] ?? BOT_ARCHETYPES.strategist;
+  const partnerName =
+    partnerPlayer?.nickname ??
+    teamMates.find((m) => m.id !== session?.playerId)?.nickname ??
+    (roomCode === "practice" || localMatchRef.current ? currentPartnerArchetype.name : "Partner");
   const filteredSignals = useMemo(() => {
     if (signalCategoryFilter === "All") return signalLibrary;
     return signalLibrary.filter((s) => s.category === signalCategoryFilter);
   }, [signalCategoryFilter]);
-  const scoreTeams: Team[] = room?.gameAuthoritative ? ["Alpha", "Bravo"] : Object.keys(scores) as Team[];
+  const scoreTeams: Team[] = ["Alpha", "Bravo"];
   const activePlayer = game?.players.find((player) => player.id === game.activePlayerId);
   const activePlayerIndex = game?.players.findIndex((player) => player.id === game.activePlayerId) ?? -1;
   const passReceiver = game && activePlayerIndex >= 0 ? game.players[(activePlayerIndex + 1) % game.players.length] : null;
   const isYourPass = game?.activePlayerId === viewerPlayerId;
   const yourFour = you ? findFourOfAKind(you.hand) : null;
+  const activeSignalBurst = signalBursts.length > 0 ? signalBursts[signalBursts.length - 1] : null;
   const prevYourFour = useRef<Suit | null>(null);
 
   useEffect(() => {
     if (yourFour && !prevYourFour.current) {
       playCue("success");
-      showTableToast(
-        "success",
-        "JACKPOT READY!",
-        `You have four ${SUIT_LABELS[yourFour]}s! Flash your secret signal to your partner!`,
-      );
+      if ((you?.hand.length ?? 0) > 4) {
+        showTableToast(
+          "warning",
+          "4-OF-A-KIND COMPLETE!",
+          `You have four ${SUIT_LABELS[yourFour]}s! Pass your 5th card first before signalling.`,
+        );
+      } else {
+        showTableToast(
+          "success",
+          "JACKPOT READY!",
+          `You have four ${SUIT_LABELS[yourFour]}s! Flash your secret signal to your partner!`,
+        );
+      }
     }
     prevYourFour.current = yourFour;
-  }, [yourFour, playCue, showTableToast]);
+  }, [yourFour, you?.hand.length, playCue, showTableToast]);
 
   useEffect(() => {
     if (selectedCardId && you && !you.hand.some((c) => c.id === selectedCardId)) {
@@ -728,9 +902,10 @@ export function JackpotApp() {
     }
   }, [selectedCardId, you]);
 
+  const isAuthoritativeOnlineRoom = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
   const suspectAttemptsLeft = you
-    ? room?.gameAuthoritative
-      ? room.suspectAttemptsRemaining?.[you.team as "Alpha" | "Bravo"] ?? SUSPECT_ATTEMPTS_PER_TEAM
+    ? isAuthoritativeOnlineRoom
+      ? room?.suspectAttemptsRemaining?.[you.team as "Alpha" | "Bravo"] ?? SUSPECT_ATTEMPTS_PER_TEAM
       : localSuspectAttempts[you.team] ?? SUSPECT_ATTEMPTS_PER_TEAM
     : SUSPECT_ATTEMPTS_PER_TEAM;
   const latestPublicSignal = game?.publicSignals?.at(-1);
@@ -825,6 +1000,42 @@ export function JackpotApp() {
     }
     if (tableLaunchCountdown === 0) {
       const timer = window.setTimeout(() => {
+        if (roomCode === "practice" || localMatchRef.current) {
+          const pName = nickname.trim() || "You";
+          const pid = session?.playerId ?? VIEWER_ID;
+          const match = new LocalMatch(
+            {
+              humanPlayerName: pName,
+              humanPlayerId: pid,
+              humanTeamSignal: selectedSignal,
+              difficulty: isTutorialMatch ? "easy" : botDifficulty,
+              partnerArchetype: isTutorialMatch ? "strategist" : selectedPartnerId,
+              tutorialRound: isTutorialMatch && round <= 2 ? (round as 1 | 2) : undefined,
+            },
+            Date.now()
+          );
+          if (isTutorialMatch && round === 1) {
+            setTutorialStep("table_cards_intro");
+            window.setTimeout(() => {
+              setTutorialStep((prev) => (prev === "table_cards_intro" ? "table_pick_card" : prev));
+            }, 2500);
+          }
+          localMatchRef.current = match;
+          setMatchRoster(match.getMatchRoster());
+          setGame({ ...match.state.game });
+          if (room) {
+            const updated: LocalRoom = {
+              ...room,
+              status: "table",
+              teamPhase: "game",
+              game: match.state.game,
+            };
+            saveRoom(updated);
+            setRoom(updated);
+          }
+          navigate("table", "practice");
+          return;
+        }
         navigate("table");
       }, 800);
       return () => window.clearTimeout(timer);
@@ -848,6 +1059,9 @@ export function JackpotApp() {
     saveRoom(nextRoom);
     setRoom(nextRoom);
     if (!overrideText) setChatDraft("");
+    if (room.code.toUpperCase() === "PRACTICE" || roomCode.toLowerCase() === "practice") {
+      return;
+    }
     void fetch(`/api/rooms/${encodeURIComponent(room.code)}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -917,16 +1131,18 @@ export function JackpotApp() {
     const currentCode = room.code;
     const currentId = session.playerId;
 
-    // Immediately remove from database on server
-    try {
-      void fetch(`/api/rooms/${encodeURIComponent(currentCode)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "leave", playerId: currentId }),
-        keepalive: true,
-      });
-    } catch {
-      // offline fallback
+    // Immediately remove from database on server (for online rooms only)
+    if (currentCode.toUpperCase() !== "PRACTICE" && roomCode.toLowerCase() !== "practice") {
+      try {
+        void fetch(`/api/rooms/${encodeURIComponent(currentCode)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "leave", playerId: currentId }),
+          keepalive: true,
+        });
+      } catch {
+        // offline fallback
+      }
     }
 
     const nextSession = leaveRoomSession(currentCode, currentId);
@@ -1121,7 +1337,7 @@ export function JackpotApp() {
           : ""
     ).trim().toUpperCase();
 
-    if (!targetCode) return;
+    if (!targetCode || targetCode === "PRACTICE") return;
 
     // Reset old room state when route code changes
     if (roomCode && roomCode !== targetCode) {
@@ -1176,6 +1392,10 @@ export function JackpotApp() {
   const activePlayerId = session?.playerId;
   useEffect(() => {
     if (screen !== "signal" || !privateRoomCode || !activePlayerId) return;
+    if (privateRoomCode.toUpperCase() === "PRACTICE" || roomCode === "practice") {
+      setTeamMates([{ id: "player-north", nickname: "Michael (Bot)" }]);
+      return;
+    }
     let active = true;
     const refreshPrivateRoom = async () => {
       try {
@@ -1235,27 +1455,290 @@ export function JackpotApp() {
 
   const sendPrivateChatMessage = (overrideText?: string) => {
     const text = (overrideText ?? teamChatDraft).trim();
-    if (!room || !session || !text || strategySeconds === 0) return;
+    if (!text || strategySeconds === 0) return;
     const now = Date.now();
+    const pid = session?.playerId ?? VIEWER_ID;
     const optimisticMsg: LocalChatMessage = {
       id: `team-msg-${now}-${Math.random().toString(36).slice(2, 8)}`,
-      playerId: session.playerId,
-      nickname,
+      playerId: pid,
+      nickname: nickname.trim() || "You",
       text,
       createdAt: now,
     };
     setTeamChat((prev) => [...prev, optimisticMsg]);
-    void updateTeamPrivate({ text });
     if (!overrideText) setTeamChatDraft("");
+
+    if (roomCode === "practice" || localMatchRef.current) {
+      window.setTimeout(() => {
+        const partnerReplies = [
+          "Got it! Let's get these 4 cards fast! ⚡",
+          "Copy that partner. Watch my signals too! 👀",
+          "Say less! Team Alpha all the way! 🏆",
+          "Sharper than sharp. Let's do this! 🔥",
+        ];
+        const reply = partnerReplies[Math.floor(Math.random() * partnerReplies.length)];
+        const replyMsg: LocalChatMessage = {
+          id: `team-msg-ai-${Date.now()}`,
+          playerId: "player-north",
+          nickname: "Michael",
+          text: reply,
+          createdAt: Date.now(),
+        };
+        setTeamChat((prev) => [...prev, replyMsg]);
+      }, 650);
+      return;
+    }
+
+    if (!room || !session) return;
+    void updateTeamPrivate({ text });
   };
 
   const confirmSecretSignal = () => {
     setLocalSignalConfirmed(true);
+    if (roomCode === "practice" || localMatchRef.current) {
+      setTeamSignalLocked(true);
+      window.setTimeout(() => {
+        setAllTeamsLocked(true);
+      }, 450);
+      return;
+    }
     void updateTeamPrivate({ signal: selectedSignal, agree: true });
+  };
+
+  const handleCompleteFirstVisit = () => {
+    const clean = normalizePlayerName(firstVisitName.trim() || "Player");
+    setNickname(clean);
+    setProfileDraft(clean);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jackpot:guest-name:v1", clean);
+    }
+    setFirstVisitCompleted();
+    setFirstVisitModalOpen(false);
+  };
+
+  const handleTutorialNext = () => {
+    if (!tutorialStep) return;
+    switch (tutorialStep) {
+      case "strategy_room_intro":
+        setTutorialStep("strategy_signal_intro");
+        break;
+      case "strategy_signal_intro":
+        setTutorialStep("table_cards_intro");
+        navigate("table", "practice");
+        break;
+      case "table_cards_intro":
+        setTutorialStep("table_pick_card");
+        break;
+      case "table_pick_card": {
+        const triCard = you?.hand.find((c) => c.suit === "triangle") ?? you?.hand[you.hand.length - 1];
+        if (triCard) setSelectedCardId(triCard.id);
+        setTutorialStep("table_pass_first_card");
+        break;
+      }
+      case "table_pass_first_card":
+        if (selectedCardId && isYourPass) {
+          onPassSelected();
+        } else {
+          const triCard = you?.hand.find((c) => c.suit === "triangle") ?? you?.hand[you.hand.length - 1];
+          if (triCard) {
+            setSelectedCardId(triCard.id);
+            window.setTimeout(() => onPassSelected(), 100);
+          }
+        }
+        break;
+      case "table_partner_signal_detected":
+        onJackpot();
+        break;
+      case "round2_observe_intro": {
+        void handleNextRoundWithSignal("thumbs-up");
+        window.setTimeout(() => {
+          const opp1 = game?.players.find((p) => p.team !== you?.team);
+          notifySignal({
+            id: `tut-opp-sig-${Date.now()}`,
+            playerId: opp1?.id ?? "player-east",
+            playerName: opp1?.name ?? "Opponent 1 (Bot)",
+            signalId: "thumbs-up",
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 20000,
+          });
+          setTutorialStep("round2_suspicious_gesture");
+        }, 1800);
+        break;
+      }
+      case "round2_suspicious_gesture":
+        onSuspect();
+        break;
+      case "tutorial_complete":
+        setIsTutorialMatch(false);
+        setTutorialStep(null);
+        setTutorialCompleted(true);
+        break;
+    }
+  };
+
+  const startTutorialMatch = () => {
+    setIsTutorialMatch(true);
+    setBotDifficulty("easy");
+    setSelectedPartnerId("strategist");
+    setSelectedSignal("thumbs-up");
+    setTutorialStep("strategy_room_intro");
+    startLocalPracticeMatch("thumbs-up", "strategist", 1);
+  };
+
+  const handlePlayOffline = () => {
+    if (isGuest && !isTutorialCompleted()) {
+      startTutorialMatch();
+    } else {
+      setIsTutorialMatch(false);
+      setTutorialStep(null);
+      startLocalPracticeMatch(undefined, account?.preferredPartnerId ?? (isGuest ? "strategist" : selectedPartnerId));
+    }
+  };
+
+  const handleRegisterAccount = () => {
+    const cleanUser = normalizePlayerName(authUsername.trim() || nickname.trim() || "Player");
+    const newAcc = migrateGuestToAccount(cleanUser, authEmail, selectedAvatar, selectedTitle, selectedPartnerId, authPassword);
+    setAccount(newAcc);
+    setNickname(newAcc.username);
+    setProfileDraft(newAcc.username);
+    setAuthModalOpen(false);
+    setSessionSummaryOpen(false);
+    setProfileSetupOpen(true);
+    showTableToast("success", "Account Created!", "Your guest match records have been saved to your permanent Neon DB profile.");
+  };
+
+  const handleSaveProfile = () => {
+    if (!account) return;
+    const updated: UserAccount = {
+      ...account,
+      avatar: selectedAvatar,
+      title: selectedTitle,
+      preferredPartnerId: selectedPartnerId,
+    };
+    saveAccount(updated);
+    setAccount(updated);
+    setProfileSetupOpen(false);
+    showTableToast("success", "Profile Updated", "Your avatar, title, and AI partner preferences have been saved.");
+    navigate("home");
+  };
+
+  const startLocalPracticeMatch = (chosenSignal?: string, partnerId = selectedPartnerId, tutorialRound?: 1 | 2) => {
+    const signalToUse = chosenSignal ?? selectedSignal ?? "thumbs-up";
+    const playerName = nickname.trim() || "You";
+    let pid = session?.playerId ?? "";
+
+    if (!session || !pid) {
+      pid = createPlayerId();
+      const newSession: LocalSession = {
+        playerId: pid,
+        nickname: playerName,
+        roomCode: "practice",
+        updatedAt: Date.now(),
+      };
+      writeSession(newSession);
+      setSession(newSession);
+    }
+
+    const partnerArchetype = getArchetype(partnerId);
+    const practiceRoom = createPracticeRoom(playerName, pid, {
+      partnerName: `${partnerArchetype.name} (Bot)`,
+    });
+    saveRoom(practiceRoom);
+    setRoom(practiceRoom);
+    setRoomCode("practice");
+    setTeamDraft(practiceRoom.teams ?? {});
+    setScores(emptyScores());
+    setRound(1);
+    setResult(null);
+    setMatchWonTeam(null);
+    setSelectedSignal(signalToUse);
+    setLocalSuspectAttempts({ Alpha: 3, Bravo: 3, Charlie: 3, Delta: 3 });
+    localMatchRef.current = null;
+
+    navigate("signal", "practice");
   };
 
   const teamAction = async (action: string, extra: Record<string, unknown> = {}) => {
     if (!room || !session || teamActionBusy) return;
+
+    if (room.code.toUpperCase() === "PRACTICE" || roomCode.toLowerCase() === "practice") {
+      if (action === "begin-assignment") {
+        const updated: LocalRoom = {
+          ...room,
+          teamPhase: "assignment",
+          teams: Object.keys(teamDraft).length ? teamDraft : room.teams ?? {},
+        };
+        saveRoom(updated);
+        setRoom(updated);
+        navigate("teams", "practice");
+        return;
+      }
+
+      if (action === "assign-teams") {
+        let assignments = (extra.assignments as Record<string, "Alpha" | "Bravo">) ?? currentTeamDraft;
+        if (extra.shuffle) {
+          const playerIds = room.players.map((p) => p.id);
+          const shuffled = [...playerIds].sort(() => Math.random() - 0.5);
+          assignments = {
+            [shuffled[0]]: "Alpha",
+            [shuffled[1]]: "Alpha",
+            [shuffled[2]]: "Bravo",
+            [shuffled[3]]: "Bravo",
+          };
+          setTeamDraft(assignments);
+        }
+        const updated: LocalRoom = {
+          ...room,
+          teamPhase: "confirmation",
+          teams: assignments,
+          teamAcceptances: {
+            [session.playerId]: true,
+            "player-east": true,
+            "player-north": true,
+            "player-west": true,
+          },
+          confirmationEndsAt: Date.now() + 2500,
+        };
+        saveRoom(updated);
+        setRoom(updated);
+
+        window.setTimeout(() => {
+          const stratRoom: LocalRoom = {
+            ...updated,
+            teamPhase: "strategy",
+            status: "strategy",
+            strategyEndsAt: Date.now() + 60000,
+          };
+          saveRoom(stratRoom);
+          setRoom(stratRoom);
+          navigate("signal", "practice");
+        }, 1800);
+        return;
+      }
+
+      if (action === "respond") {
+        if (extra.accept === true) {
+          const stratRoom: LocalRoom = {
+            ...room,
+            teamPhase: "strategy",
+            status: "strategy",
+            strategyEndsAt: Date.now() + 60000,
+          };
+          saveRoom(stratRoom);
+          setRoom(stratRoom);
+          navigate("signal", "practice");
+        } else {
+          const assignRoom: LocalRoom = {
+            ...room,
+            teamPhase: "assignment",
+          };
+          saveRoom(assignRoom);
+          setRoom(assignRoom);
+        }
+        return;
+      }
+    }
+
     setTeamActionBusy(true);
     try {
       const response = await fetch(`/api/rooms/${encodeURIComponent(room.code)}`, {
@@ -1307,26 +1790,82 @@ export function JackpotApp() {
     setBusy(false);
     setMatchStats((prev) => ({ ...prev, roundsPlayed: prev.roundsPlayed + 1 }));
 
-    showTableToast(outcome.valid ? "success" : "warning", outcome.title, outcome.detail);
+    // Record stats for guest session
+    if (isGuest) {
+      recordGuestStat("roundsPlayed", 1);
+      if (outcome.valid && outcome.scoringTeam === you?.team) {
+        recordGuestStat("wins", 1);
+      }
+      if (outcome.kind === "jackpot" && outcome.valid) {
+        recordGuestStat("jackpotsCalled", 1);
+      } else if (outcome.kind === "suspect" && outcome.valid) {
+        recordGuestStat("suspectsCaught", 1);
+      }
+    } else if (account) {
+      const updatedStats = {
+        ...account.stats,
+        roundsPlayed: account.stats.roundsPlayed + 1,
+        wins: outcome.valid && outcome.scoringTeam === you?.team ? account.stats.wins + 1 : account.stats.wins,
+        jackpotsCalled: outcome.kind === "jackpot" && outcome.valid ? account.stats.jackpotsCalled + 1 : account.stats.jackpotsCalled,
+        suspectsCaught: outcome.kind === "suspect" && outcome.valid ? account.stats.suspectsCaught + 1 : account.stats.suspectsCaught,
+      };
+      const updatedAccount = { ...account, stats: updatedStats };
+      saveAccount(updatedAccount);
+      setAccount(updatedAccount);
+    }
+
+    if (isTutorialMatch) {
+      if (round === 1) {
+        setTutorialStep("round2_observe_intro");
+      } else if (round === 2) {
+        setTutorialStep("tutorial_complete");
+        setTutorialCompleted(true);
+      }
+    }
 
     if (room) {
       const updatedRoom = { ...room, status: "result" as const, game, scores: nextScores, result: outcome };
       saveRoom(updatedRoom);
       setRoom(updatedRoom);
+    } else {
+      showTableToast(outcome.valid ? "success" : "warning", outcome.title, outcome.detail);
     }
 
     // Check if either team has spelled all 7 letters of JACKPOT
     const winningTeam = (["Alpha", "Bravo"] as const).find((t) => nextScores[t] >= WINNING_SCORE);
     if (winningTeam) {
       setMatchWonTeam(winningTeam);
-      playCue("jackpot");
-    } else {
+    }
+
+    if (roomCode === "practice" || localMatchRef.current) {
+      navigate("result", "practice");
+      return;
+    }
+
+    if (!winningTeam && !room) {
       setRoundTransitionOpen(true);
     }
   };
 
   const tryPass = (fromId: string, cardId: string) => {
     if (!game || busy) return;
+    if (localMatchRef.current) {
+      const match = localMatchRef.current;
+      const outcome = match.submitHumanAction({ type: "pass", playerId: fromId, cardId });
+      if (outcome.ok) {
+        setGame({ ...match.state.game });
+        if (match.state.game.lastPassEvent) {
+          seenPassIds.current.add(match.state.game.lastPassEvent.id);
+          lastPassEventId.current = match.state.game.lastPassEvent.id;
+          notifyCardPass(match.state.game.lastPassEvent);
+        }
+        setSelectedCardId(null);
+        setStatus(match.state.game.log[0] ?? "");
+      } else {
+        setStatus(outcome.error ?? "Pass failed.");
+      }
+      return;
+    }
     try {
       const next = passCard(game, fromId, cardId);
       setGame(next);
@@ -1347,14 +1886,25 @@ export function JackpotApp() {
     }
   };
 
-  const requestServerGameAction = async (type: "pass" | "jackpot" | "suspect" | "signal" | "fake-signal" | "reaction" | "restart" | "next-round" | "rematch", cardId?: string, reactionId?: string) => {
+  const requestServerGameAction = async (
+    type: "pass" | "jackpot" | "suspect" | "signal" | "fake-signal" | "reaction" | "restart" | "next-round" | "rematch",
+    cardId?: string,
+    reactionId?: string,
+    targetPlayerId?: string
+  ) => {
     if (!room || !session || busy) return;
     setBusy(true);
     try {
       const sendRequest = () => fetch(`/api/rooms/${encodeURIComponent(room.code)}/game`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ playerId: session.playerId, type, ...(cardId ? { cardId } : {}), ...(reactionId ? { reactionId } : {}) }),
+        body: JSON.stringify({
+          playerId: session.playerId,
+          type,
+          ...(cardId ? { cardId } : {}),
+          ...(reactionId ? { reactionId } : {}),
+          ...(targetPlayerId ? { targetPlayerId } : {}),
+        }),
       });
 
       let response = await sendRequest();
@@ -1393,6 +1943,21 @@ export function JackpotApp() {
 
   const onPassSelected = () => {
     if (!game || !selectedCardId || !isYourPass) return;
+    if (isTutorialMatch && (tutorialStep === "table_pass_first_card" || tutorialStep === "table_pick_card")) {
+      // In tutorial round 1, advance step once first pass executes
+      window.setTimeout(() => {
+        const partner = game.players.find((p) => p.team === you?.team && p.id !== viewerPlayerId);
+        notifySignal({
+          id: `tut-p-sig-${Date.now()}`,
+          playerId: partner?.id ?? "player-north",
+          playerName: partner?.name ?? "Partner (Bot)",
+          signalId: "thumbs-up",
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 25000,
+        });
+        setTutorialStep("table_partner_signal_detected");
+      }, 1000);
+    }
     if (room?.gameAuthoritative) {
       void requestServerGameAction("pass", selectedCardId);
       return;
@@ -1406,95 +1971,198 @@ export function JackpotApp() {
     setJackpotCelebrating(true);
     playCue("suspense");
 
-    window.setTimeout(() => {
-      if (room?.gameAuthoritative) {
-        void requestServerGameAction("jackpot");
-        setJackpotCelebrating(false);
-      } else {
-        const outcome = resolveJackpot(game, viewerPlayerId);
-        if (outcome.valid) {
-          playCue("jackpot");
+    if (room?.gameAuthoritative) {
+      void requestServerGameAction("jackpot");
+      setJackpotCelebrating(false);
+    } else if (localMatchRef.current) {
+      const match = localMatchRef.current;
+      const outcome = match.submitHumanAction({ type: "jackpot", playerId: viewerPlayerId });
+      if (outcome.ok && outcome.result) {
+        if (outcome.result.valid) {
           setMatchStats((prev) => ({ ...prev, jackpotsCalled: prev.jackpotsCalled + 1 }));
           if (partner) triggerTableAutoReaction([partner.id], "fire");
           const opponents = game.players.filter((p) => p.team !== you?.team).map((p) => p.id);
           triggerTableAutoReaction(opponents, "shock");
-          finishRound(outcome);
         } else {
-          playCue("false_call");
           setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
           const opponents = game.players.filter((p) => p.team !== you?.team).map((p) => p.id);
           triggerTableAutoReaction(opponents, "laugh");
-          finishRound(outcome);
         }
-        window.setTimeout(() => setJackpotCelebrating(false), 800);
+        finishRound(outcome.result);
       }
-    }, 500);
+      window.setTimeout(() => setJackpotCelebrating(false), 800);
+    } else {
+      const outcome = resolveJackpot(game, viewerPlayerId);
+      if (outcome.valid) {
+        setMatchStats((prev) => ({ ...prev, jackpotsCalled: prev.jackpotsCalled + 1 }));
+        if (partner) triggerTableAutoReaction([partner.id], "fire");
+        const opponents = game.players.filter((p) => p.team !== you?.team).map((p) => p.id);
+        triggerTableAutoReaction(opponents, "shock");
+        finishRound(outcome);
+      } else {
+        setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
+        const opponents = game.players.filter((p) => p.team !== you?.team).map((p) => p.id);
+        triggerTableAutoReaction(opponents, "laugh");
+        finishRound(outcome);
+      }
+      window.setTimeout(() => setJackpotCelebrating(false), 800);
+    }
   };
 
   const onJackpot = () => {
     if (!game || busy) return;
-    setJackpotModalOpen(true);
+    // Calling JACKPOT on your partner is allowed even if you hold 5 cards!
+    executeJackpot();
   };
 
-  const executeSuspect = () => {
+  const executeSuspect = (targetPlayerId?: string) => {
     if (!game || busy) return;
     setSuspectModalOpen(false);
     setSuspectRevealing(true);
     playCue("suspense");
 
-    window.setTimeout(() => {
-      setSuspectRevealing(false);
-      if (room?.gameAuthoritative) {
-        void requestServerGameAction("suspect");
-      } else {
-        const caller = game.players.find((player) => player.id === viewerPlayerId);
-        const callerTeam = caller?.team ?? "Alpha";
-        const remaining = localSuspectAttempts[callerTeam];
-        if (remaining <= 0) {
-          setStatus("Your team has used all three SUSPECT calls this round.");
-          return;
-        }
-        const outcome = resolveSuspect(game, viewerPlayerId);
-        setLocalSuspectAttempts((current) => ({ ...current, [callerTeam]: remaining - 1 }));
+    const targetPlayer = targetPlayerId ? game.players.find((p) => p.id === targetPlayerId) : undefined;
+    const isSharedOnline = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
 
-        if (outcome.valid) {
-          playCue("caught");
+    if (isSharedOnline) {
+      void requestServerGameAction("suspect", undefined, undefined, targetPlayerId);
+      window.setTimeout(() => setSuspectRevealing(false), 400);
+    } else if (localMatchRef.current) {
+      const match = localMatchRef.current;
+      const caller = game.players.find((player) => player.id === viewerPlayerId);
+      const callerTeam = caller?.team ?? "Alpha";
+      const outcome = match.submitHumanAction({ type: "suspect", playerId: viewerPlayerId, targetPlayerId });
+      if (outcome.ok && outcome.result) {
+        if (outcome.result.valid) {
           setMatchStats((prev) => ({ ...prev, suspectsCaught: prev.suspectsCaught + 1 }));
           const allOther = game.players.filter((p) => p.id !== viewerPlayerId).map((p) => p.id);
           triggerTableAutoReaction(allOther, "eyes");
-          finishRound(outcome);
+          finishRound(outcome.result);
         } else {
           playCue("false_call");
           setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
           const opponents = game.players.filter((p) => p.team !== callerTeam).map((p) => p.id);
           triggerTableAutoReaction(opponents, "laugh");
-          setStatus(`FALSE SUSPECT — ${remaining - 1} team calls remain.`);
-          showTableToast("warning", "False Call", `No opponent had four of a kind. ${remaining - 1} calls left.`);
+          const remaining = match.state.suspectsRemaining[callerTeam] ?? 0;
+          setLocalSuspectAttempts((current) => ({ ...current, [callerTeam]: remaining }));
+          const targetName = targetPlayer ? targetPlayer.name : "opponent";
+          setStatus(`FALSE SUSPECT on ${targetName} — ${remaining} team calls remain.`);
+          showTableToast("warning", "False Call", `${targetName} did not have four of a kind! ${remaining} calls left.`);
         }
       }
-    }, 1000);
+      window.setTimeout(() => setSuspectRevealing(false), 400);
+    } else {
+      const caller = game.players.find((player) => player.id === viewerPlayerId);
+      const callerTeam = caller?.team ?? "Alpha";
+      const remaining = localSuspectAttempts[callerTeam] ?? 0;
+      if (remaining <= 0) {
+        setStatus("Your team has used all three SUSPECT calls this round.");
+        return;
+      }
+      const outcome = resolveSuspect(game, viewerPlayerId, targetPlayerId);
+      setLocalSuspectAttempts((current) => ({ ...current, [callerTeam]: remaining - 1 }));
+
+      if (outcome.valid) {
+        setMatchStats((prev) => ({ ...prev, suspectsCaught: prev.suspectsCaught + 1 }));
+        const allOther = game.players.filter((p) => p.id !== viewerPlayerId).map((p) => p.id);
+        triggerTableAutoReaction(allOther, "eyes");
+        finishRound(outcome);
+      } else {
+        playCue("false_call");
+        setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
+        const opponents = game.players.filter((p) => p.team !== callerTeam).map((p) => p.id);
+        triggerTableAutoReaction(opponents, "laugh");
+        const targetName = targetPlayer ? targetPlayer.name : "opponent";
+        setStatus(`FALSE SUSPECT on ${targetName} — ${remaining - 1} team calls remain.`);
+        showTableToast("warning", "False Call", `${targetName} did not have four of a kind! ${remaining - 1} calls left.`);
+      }
+      window.setTimeout(() => setSuspectRevealing(false), 400);
+    }
   };
 
-  const onSuspect = () => {
+  const onSuspect = (targetPlayerId?: string) => {
     if (!game || busy) return;
     const currentTeam = (you?.team ?? "Alpha") as "Alpha" | "Bravo";
-    const remaining = room?.suspectAttemptsRemaining?.[currentTeam] ?? localSuspectAttempts[currentTeam] ?? 0;
+    const isSharedOnline = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
+    const remaining = isSharedOnline
+      ? room?.suspectAttemptsRemaining?.[currentTeam] ?? SUSPECT_ATTEMPTS_PER_TEAM
+      : localSuspectAttempts[currentTeam] ?? SUSPECT_ATTEMPTS_PER_TEAM;
     if (remaining <= 0) {
       showTableToast("warning", "No calls left", "Your team has used all 3 SUSPECT calls for this round.");
       return;
     }
-    setSuspectModalOpen(true);
+    executeSuspect(targetPlayerId);
+  };
+
+  const handleNextRoundWithSignal = async (signalIdToUse: string) => {
+    setRoundTransitionOpen(false);
+    setRoundSignalPickOpen(false);
+    setResult(null);
+    setSelectedSignal(signalIdToUse);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jackpot:signal:v1", signalIdToUse);
+    }
+
+    const effectiveRoomCode = roomCode || "practice";
+    const isSharedOnline = Boolean(effectiveRoomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
+    if (isSharedOnline) {
+      await requestServerGameAction("next-round");
+    } else {
+      const nextR = round + 1;
+      setRound(nextR);
+      const pName = nickname.trim() || session?.nickname?.trim() || "You";
+      const pid = session?.playerId ?? VIEWER_ID;
+      const match = new LocalMatch(
+        {
+          humanPlayerName: pName,
+          humanPlayerId: pid,
+          humanTeamSignal: signalIdToUse,
+          difficulty: botDifficulty,
+          partnerArchetype: selectedPartnerId,
+        },
+        Date.now()
+      );
+      localMatchRef.current = match;
+      setMatchRoster(match.getMatchRoster());
+      setGame({ ...match.state.game });
+      setLocalSuspectAttempts({ Alpha: 3, Bravo: 3, Charlie: 3, Delta: 3 });
+      if (room) {
+        const updatedRoom: LocalRoom = {
+          ...room,
+          status: "table",
+          teamPhase: "game",
+          game: match.state.game,
+          round: nextR,
+          result: null,
+        };
+        saveRoom(updatedRoom);
+        setRoom(updatedRoom);
+      }
+      navigate("table", effectiveRoomCode);
+      if (isTutorialMatch && nextR === 2) {
+        window.setTimeout(() => {
+          const opp1 = match.state.game.players.find((p) => p.team !== "Alpha");
+          notifySignal({
+            id: `tut-opp-sig-${Date.now()}`,
+            playerId: opp1?.id ?? "player-east",
+            playerName: opp1?.name ?? "Opponent 1 (Bot)",
+            signalId: "thumbs-up",
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 20000,
+          });
+          setTutorialStep("round2_suspicious_gesture");
+        }, 1800);
+      }
+    }
   };
 
   const handleNextRound = async () => {
     setRoundTransitionOpen(false);
-    setResult(null);
-    if (room?.gameAuthoritative) {
-      await requestServerGameAction("next-round");
+    // Open signal picker so the team can change their exposed signal for the new round
+    if (!matchWonTeam && (scores.Alpha || 0) < WINNING_SCORE && (scores.Bravo || 0) < WINNING_SCORE) {
+      setRoundSignalPickOpen(true);
     } else {
-      setRound((r) => r + 1);
-      setStrategySeconds(60);
-      navigate("signal");
+      handleRematch();
     }
   };
 
@@ -1507,6 +2175,37 @@ export function JackpotApp() {
     setMatchStats({ roundsPlayed: 1, jackpotsCalled: 0, suspectsCaught: 0, falseCalls: 0 });
     if (room?.gameAuthoritative) {
       await requestServerGameAction("rematch");
+    } else if (roomCode === "practice" || localMatchRef.current) {
+      const pName = nickname.trim() || "You";
+      const pid = session?.playerId ?? VIEWER_ID;
+      const match = new LocalMatch(
+        {
+          humanPlayerName: pName,
+          humanPlayerId: pid,
+          humanTeamSignal: selectedSignal,
+          difficulty: botDifficulty,
+          partnerArchetype: selectedPartnerId,
+        },
+        Date.now()
+      );
+      localMatchRef.current = match;
+      setMatchRoster(match.getMatchRoster());
+      setGame({ ...match.state.game });
+      setLocalSuspectAttempts({ Alpha: 3, Bravo: 3, Charlie: 3, Delta: 3 });
+      if (room) {
+        const updatedRoom: LocalRoom = {
+          ...room,
+          status: "strategy",
+          teamPhase: "strategy",
+          game: match.state.game,
+          scores: emptyScores(),
+          round: 1,
+          result: null,
+        };
+        saveRoom(updatedRoom);
+        setRoom(updatedRoom);
+      }
+      navigate("signal", "practice");
     } else {
       setStrategySeconds(60);
       navigate("signal");
@@ -1514,22 +2213,30 @@ export function JackpotApp() {
   };
 
   const handleExitHome = useCallback(() => {
+    if (isGuest && matchStats.roundsPlayed > 0 && !sessionSummaryOpen) {
+      setSessionSummaryOpen(true);
+      return;
+    }
     const currentCode = roomCode;
     const currentPid = session?.playerId;
+    localMatchRef.current = null;
     setGame(null);
     setResult(null);
     setRoom(null);
     setRoomCode("");
+    setIsTutorialMatch(false);
+    setTutorialStep(null);
+    setSessionSummaryOpen(false);
     if (session) {
       writeSession({ ...session, roomCode: "" });
     }
-    if (currentCode && currentPid) {
+    if (currentCode && currentCode.toLowerCase() !== "practice" && currentPid) {
       void fetch(`/api/rooms/${encodeURIComponent(currentCode)}?playerId=${encodeURIComponent(currentPid)}&deliberate=true`, {
         method: "DELETE",
       }).catch(() => {});
     }
     router.push("/");
-  }, [roomCode, router, session]);
+  }, [isGuest, matchStats.roundsPlayed, roomCode, router, session, sessionSummaryOpen]);
 
   const handleReturnToLobby = useCallback(async () => {
     const code = roomCode || session?.roomCode;
@@ -1583,15 +2290,24 @@ export function JackpotApp() {
     }
   }, [matchInterruption, handleReturnToLobby]);
 
-  // Play sound effect whenever entering the result screen
+  // Play sound effect whenever entering the result screen (strictly ONCE per result)
   useEffect(() => {
-    if (screen !== "result" || !result) return;
+    if (screen !== "result" || !result) {
+      if (screen !== "result") {
+        playedResultSoundRef.current = null;
+      }
+      return;
+    }
+    const resultKey = `${round}:${result.kind}:${result.title}:${result.valid}:${result.callingPlayerId}:${result.scoringTeam ?? ""}`;
+    if (playedResultSoundRef.current === resultKey) return;
+    playedResultSoundRef.current = resultKey;
+
     if (result.valid) {
-      playCue("jackpot");
+      playCue(result.kind === "suspect" ? "caught" : "jackpot");
     } else {
       playCue("false_call");
     }
-  }, [screen, result, playCue]);
+  }, [screen, result, round, playCue]);
 
   const handleShareResult = async () => {
     const winner = matchWonTeam ?? "Alpha";
@@ -1614,9 +2330,27 @@ export function JackpotApp() {
 
   const onSignal = () => {
     setSignalMenuOpen(false);
+    if (you && you.hand.length > 4) {
+      showTableToast("warning", "Pass card first", "You are holding 5 cards! Pass your extra card before flashing your signal.");
+      return;
+    }
     if (room?.gameAuthoritative) {
       playCue("signal");
       void requestServerGameAction("signal");
+    } else if (localMatchRef.current) {
+      const match = localMatchRef.current;
+      const outcome = match.submitHumanAction({ type: "signal", playerId: viewerPlayerId });
+      if (outcome.ok) {
+        setGame({ ...match.state.game });
+        const signals = match.state.game.publicSignals ?? [];
+        const newest = signals[signals.length - 1];
+        if (newest) {
+          lastSignalEventId.current = newest.id;
+          notifySignal(newest);
+        }
+        setSignalFlash(true);
+        window.setTimeout(() => setSignalFlash(false), 2400);
+      }
     } else if (game) {
       const actor = game.players.find((player) => player.id === viewerPlayerId);
       const createdAt = Date.now();
@@ -1628,10 +2362,10 @@ export function JackpotApp() {
     }
     setStatus(`You flashed your team signal to ${partner?.name ?? "partner"}.`);
 
-    if (!game || !partner || room?.gameAuthoritative) return;
+    if (!game || !partner || room?.gameAuthoritative || localMatchRef.current) return;
 
-    // Partner AI: if they already hold four-of-a-kind, they call JACKPOT for the team.
-    if (findFourOfAKind(partner.hand)) {
+    // Partner AI: if they already hold four-of-a-kind (with exactly 4 cards), they call JACKPOT for the team.
+    if (partner.hand.length === 4 && findFourOfAKind(partner.hand)) {
       setBusy(true);
       window.setTimeout(() => {
         finishRound(resolveJackpot(game, partner.id));
@@ -1642,9 +2376,31 @@ export function JackpotApp() {
   const onFakeSignal = () => {
     if (!game || busy) return;
     setSignalMenuOpen(false);
+    if (you && you.hand.length > 4) {
+      showTableToast("warning", "Pass card first", "You are holding 5 cards! Pass your extra card before flashing your signal.");
+      return;
+    }
     if (room?.gameAuthoritative) {
       playCue("signal");
       void requestServerGameAction("fake-signal");
+    } else if (localMatchRef.current) {
+      const match = localMatchRef.current;
+      const actual = selectedSignal;
+      const choices = signalLibrary.filter((signal) => signal.id !== actual);
+      const decoy = choices[Math.floor(Math.random() * choices.length)];
+      const outcome = match.submitHumanAction({ type: "fake-signal", playerId: viewerPlayerId, signalId: decoy.id });
+      if (outcome.ok) {
+        setGame({ ...match.state.game });
+        const signals = match.state.game.publicSignals ?? [];
+        const newest = signals[signals.length - 1];
+        if (newest) {
+          lastSignalEventId.current = newest.id;
+          notifySignal(newest);
+        }
+        setSignalFlash(true);
+        window.setTimeout(() => setSignalFlash(false), 2400);
+      }
+      setStatus("Fake signal flashed — bluff them into calling SUSPECT.");
     } else {
       const actual = selectedSignal;
       const choices = signalLibrary.filter((signal) => signal.id !== actual);
@@ -1668,6 +2424,17 @@ export function JackpotApp() {
       void requestServerGameAction("reaction", undefined, reactionId);
       return;
     }
+    if (localMatchRef.current) {
+      const match = localMatchRef.current;
+      const outcome = match.submitHumanAction({ type: "reaction", playerId: viewerPlayerId, reactionId });
+      if (outcome.ok) {
+        setGame({ ...match.state.game });
+        const reactions = match.state.game.publicReactions ?? [];
+        const newest = reactions[reactions.length - 1];
+        if (newest) displayReaction(newest);
+      }
+      return;
+    }
     const actor = game.players.find((player) => player.id === viewerPlayerId);
     const reactionEvent: ReactionEvent = {
       id: `reaction-${Date.now()}`,
@@ -1688,6 +2455,7 @@ export function JackpotApp() {
   };
 
   const runAiTurn = useEffectEvent((snapshot: GameSnapshot) => {
+    if (localMatchRef.current) return;
     if (snapshot.activePlayerId === viewerPlayerId) return;
 
     const actor = snapshot.players.find((player) => player.id === snapshot.activePlayerId);
@@ -1755,12 +2523,66 @@ export function JackpotApp() {
   });
 
   useEffect(() => {
-    if (screen !== "table" || !game || busy || room?.gameAuthoritative) return;
+    if (screen !== "table" || !game || busy || room?.gameAuthoritative || localMatchRef.current) return;
     if (game.activePlayerId === viewerPlayerId) return;
     const snapshot = game;
     const timer = window.setTimeout(() => runAiTurn(snapshot), 0);
     return () => window.clearTimeout(timer);
   }, [screen, game, busy, room?.gameAuthoritative, viewerPlayerId]);
+
+  // Local Practice Bot Simulation Loop
+  useEffect(() => {
+    if (screen !== "table" || !localMatchRef.current) return;
+    const match = localMatchRef.current;
+    if (match.state.status !== "playing") return;
+
+    const interval = window.setInterval(() => {
+      if (match.state.status !== "playing") return;
+      const beforePassCount = match.state.game.passCount;
+      const beforeSignalsCount = match.state.game.publicSignals?.length ?? 0;
+
+      const executed = match.stepTo(Date.now(), 100);
+
+      if (match.state.game.passCount !== beforePassCount || executed.length > 0) {
+        setGame({ ...match.state.game });
+        if (match.state.game.log[0]) setStatus(match.state.game.log[0]);
+
+        if (match.state.game.lastPassEvent && match.state.game.lastPassEvent.id !== lastPassEventId.current) {
+          lastPassEventId.current = match.state.game.lastPassEvent.id;
+          seenPassIds.current.add(match.state.game.lastPassEvent.id);
+          notifyCardPass(match.state.game.lastPassEvent);
+        }
+
+        const signals = match.state.game.publicSignals ?? [];
+        if (signals.length > beforeSignalsCount) {
+          const newest = signals[signals.length - 1];
+          if (newest && newest.id !== lastSignalEventId.current) {
+            lastSignalEventId.current = newest.id;
+            notifySignal(newest);
+          }
+        }
+      }
+
+      for (const exec of executed) {
+        if (exec.action.type === "suspect" && exec.outcome && !exec.outcome.valid) {
+          const callingTeam = exec.outcome.callingTeam;
+          if (callingTeam) {
+            setLocalSuspectAttempts((prev) => ({
+              ...prev,
+              [callingTeam]: Math.max(0, (prev[callingTeam] ?? 3) - 1),
+            }));
+          }
+          showTableToast("warning", exec.outcome.title, exec.outcome.detail);
+        }
+      }
+
+      if ((match.state.status as "playing" | "over") === "over" && match.state.result) {
+        finishRound(match.state.result);
+      }
+    }, 120);
+
+    return () => window.clearInterval(interval);
+  }, [screen, notifyCardPass, notifySignal, finishRound, showTableToast]);
 
   if (!hydrated) {
     return (
@@ -1770,56 +2592,25 @@ export function JackpotApp() {
     );
   }
 
-  const isFullWidthScreen = screen !== "table";
+  const isFramelessScreen = screen === "table" || screen === "result";
+  const isFullWidthScreen = !isFramelessScreen;
 
   return (
-    <main className={`app-shell ${isFullWidthScreen ? "full-width" : ""} ${screen === "table" ? "table-mode" : ""} ${preferences.animationsEnabled ? "" : "motion-reduced"}`}>
-      <div className={`scene-frame ${isFullWidthScreen ? "full-width-frame" : ""} ${screen === "table" ? "table-frame" : ""}`}>
+    <main className={`app-shell ${isFullWidthScreen ? "full-width" : ""} ${isFramelessScreen ? "table-mode" : ""} ${screen === "result" ? "result-mode" : ""} ${preferences.animationsEnabled ? "" : "motion-reduced"}`}>
+      <div className={`scene-frame ${isFullWidthScreen ? "full-width-frame" : ""} ${isFramelessScreen ? "table-frame" : ""} ${screen === "result" ? "result-frame" : ""}`}>
         {screen === "home" && (
           <section className="hero-screen lobby-home jackpot-home" style={{ "--landing-bg-desktop": `url("${landingBackground.src}")`, "--landing-bg-mobile": `url("${mobileLandingBackground.src}")` } as React.CSSProperties}>
-            <header className="jackpot-nav">
-              <div className="jackpot-wordmark">
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>PLAY · PASS · WIN</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <details className="profile-menu">
-                  <summary aria-label={`Open player profile for ${nickname || "Player"}`}>
-                    <span className="profile-avatar">{(nickname.trim()[0] || "M").toUpperCase()}</span>
-                    <span className="profile-name">{nickname || "Player"}</span>
-                    <svg className="profile-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                      <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="profile-popover">
-                    <span className="mini-tag">GUEST PROFILE</span>
-                    <label htmlFor="home-player-name">Display name</label>
-                    <input
-                      id="home-player-name"
-                      value={profileDraft}
-                      maxLength={MAX_PLAYER_NAME_LENGTH}
-                      onChange={(event) => setProfileDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void saveProfileName();
-                      }}
-                    />
-                    <small>{profileDraft.length}/{MAX_PLAYER_NAME_LENGTH} characters</small>
-                    <p>Your guest name is saved on this browser.</p>
-                    <button
-                      type="button"
-                      className="profile-save-button"
-                      onClick={() => void saveProfileName()}
-                      disabled={!profileDraft.trim()}
-                    >
-                      Save name
-                    </button>
-                    {settingsStatus ? <small role="status">{settingsStatus}</small> : null}
-                  </div>
-                </details>
-              </div>
-            </header>
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              onNavigateSettings={() => navigate("settings")}
+            />
             <div className="jackpot-landing-v2">
               <div className="landing-center-flow">
                 {/* 3D Title with side crowns */}
@@ -1843,40 +2634,6 @@ export function JackpotApp() {
                   The game you grew up playing.
                   <span>Now online.</span>
                 </h2>
-
-                {/* Rules description parchment pill with clean vector SVG icons */}
-                <div className="rules-parchment-pill">
-                  <span className="parchment-text">A Nigerian team card game: pass cards, share a secret signal,</span>
-                  <div className="parchment-chips">
-                    <span className="rule-chip">
-                      <span className="chip-svg-icon" aria-hidden="true">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="5" width="13" height="17" rx="2" />
-                          <path d="M8 2h11a2 2 0 0 1 2 2v13" />
-                        </svg>
-                      </span>
-                      pass cards
-                    </span>
-                    <span className="rule-chip">
-                      <span className="chip-svg-icon" aria-hidden="true">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                        </svg>
-                      </span>
-                      secret signal
-                    </span>
-                    <span className="rule-chip">
-                      <span className="chip-svg-icon" aria-hidden="true">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7zm1 14h18v2H3v-2z" />
-                        </svg>
-                      </span>
-                      call JACKPOT
-                    </span>
-                  </div>
-                </div>
 
                 {/* Player Profile / Name field */}
                 <div className="landing-user-bar single-name">
@@ -1920,8 +2677,25 @@ export function JackpotApp() {
                   </label>
                 </div>
 
-                {/* Wood Plank Game Buttons */}
+                {/* 3 Game Buttons in 1 Row with Clean SVG Icons (No Emojis) */}
                 <div className="landing-wood-actions">
+                  <button
+                    type="button"
+                    className="wood-btn wood-practice"
+                    onClick={() => handlePlayOffline()}
+                  >
+                    <span className="wood-btn-badge" aria-hidden="true">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="6" width="20" height="12" rx="2" />
+                        <path d="M6 12h4" />
+                        <path d="M8 10v4" />
+                        <circle cx="17" cy="10" r="1" fill="currentColor" />
+                        <circle cx="15" cy="13" r="1" fill="currentColor" />
+                      </svg>
+                    </span>
+                    <span className="wood-btn-text">OFFLINE PLAY</span>
+                  </button>
+
                   <button
                     type="button"
                     className="wood-btn wood-create"
@@ -1929,43 +2703,87 @@ export function JackpotApp() {
                     disabled={!nickname.trim()}
                   >
                     <span className="wood-btn-badge" aria-hidden="true">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="9" r="4" />
-                        <path d="M12 13v7" />
-                        <path d="M9 17h6" />
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="16" />
+                        <line x1="8" y1="12" x2="16" y2="12" />
                       </svg>
                     </span>
-                    <span className="wood-btn-text">CREATE A ROOM</span>
+                    <span className="wood-btn-text">CREATE ROOM</span>
                   </button>
+
                   <button
                     type="button"
                     className="wood-btn wood-join"
                     onClick={() => navigate("join")}
                     disabled={!nickname.trim()}
                   >
-                    <span className="wood-btn-text">JOIN A ROOM</span>
                     <span className="wood-btn-badge" aria-hidden="true">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="2" y1="12" x2="22" y2="12" />
-                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                        <polyline points="10 17 15 12 10 7" />
+                        <line x1="15" y1="12" x2="3" y2="12" />
                       </svg>
                     </span>
+                    <span className="wood-btn-text">JOIN ROOM</span>
                   </button>
                 </div>
+
+                {/* Guest Account Prompt Banner (Subtle & Non-blocking) */}
+                {isGuest && (
+                  <div className="guest-account-prompt-banner">
+                    <div className="guest-prompt-text">
+                      <span className="guest-sparkle-icon">✦</span>
+                      <span>Create an account to save your progress and unlock your full profile.</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="guest-prompt-btn"
+                      onClick={() => {
+                        setAuthUsername(nickname || "Player");
+                        setAuthModalOpen(true);
+                      }}
+                    >
+                      Create Free Account
+                    </button>
+                  </div>
+                )}
+
+                {/* Authenticated Account Status Banner */}
+                {account && (
+                  <div className="user-account-badge-card">
+                    <div className="user-badge-left">
+                      <span className="user-badge-avatar">{account.avatar}</span>
+                      <div className="user-badge-meta">
+                        <span className="user-badge-name">{account.username}</span>
+                        <span className="user-badge-title">{account.title}</span>
+                      </div>
+                    </div>
+                    <div className="user-badge-stats">
+                      🏆 {account.stats.wins} Wins · {account.stats.jackpotsCalled} Jackpots
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Floating Quick-Menu Menu on Right */}
+              {/* Floating Quick-Menu Menu on Right - Tutorials & Settings */}
               <div className="floating-card-menu">
-                <button type="button" className="quick-menu-item" onClick={() => navigate("howto")}>
+                <button type="button" className="quick-menu-item" onClick={() => navigate("settings")}>
                   <span className="menu-svg-icon" aria-hidden="true">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="16" x2="12" y2="12" />
-                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                     </svg>
                   </span>
-                  Game Info
+                  Settings
+                </button>
+                <button type="button" className="quick-menu-item" onClick={() => startTutorialMatch()}>
+                  <span className="menu-svg-icon" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                  </span>
+                  Interactive Tutorial
                 </button>
                 <button type="button" className="quick-menu-item" onClick={() => navigate("howto")}>
                   <span className="menu-svg-icon" aria-hidden="true">
@@ -1974,19 +2792,10 @@ export function JackpotApp() {
                       <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
                     </svg>
                   </span>
-                  Tutorials
+                  Rules Guide
                 </button>
               </div>
             </div>
-
-            <footer className="jackpot-footer">
-              <div>
-                <span>♟</span> 4–8 Players <i /> <span>◎</span> Online Multiplayer
-              </div>
-              <button type="button" onClick={() => navigate("howto")}>
-                Same cards. Different stories.
-              </button>
-            </footer>
           </section>
         )}
 
@@ -1998,37 +2807,79 @@ export function JackpotApp() {
               "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
             } as React.CSSProperties}
           >
-            <header className="jackpot-nav">
-              <div
-                className="jackpot-wordmark"
-                onClick={() => navigate("home")}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>RULES &amp; STRATEGY</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <button
-                  type="button"
-                  className="ghost-btn jackpot-back-btn"
-                  onClick={() => navigate("home")}
-                  aria-label="Back to Menu"
-                >
-                  <span className="back-btn-text">← Back to Menu</span>
-                  <span className="back-btn-mobile-text">← Menu</span>
-                </button>
-              </div>
-            </header>
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              showBack
+              onBack={() => navigate("home")}
+              onNavigateHome={() => navigate("home")}
+            />
 
             <div className="jackpot-subpage-content howto-subpage-content">
               <HowToPlayInteractive
                 onBack={() => navigate("home")}
                 onCreateRoom={() => navigate("create")}
                 onJoinRoom={() => navigate("join")}
+              />
+            </div>
+          </section>
+        )}
+
+        {screen === "settings" && (
+          <section
+            className="hero-screen lobby-home jackpot-home jackpot-subpage settings-subpage"
+            style={{
+              "--landing-bg-desktop": `url("${landingBackground.src}")`,
+              "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
+            } as React.CSSProperties}
+          >
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              showBack
+              onBack={() => navigate("home")}
+              onNavigateHome={() => navigate("home")}
+            />
+
+            <div className="jackpot-subpage-content settings-subpage-content">
+              <SettingsPageContent
+                preferences={preferences}
+                setPreferences={setPreferences}
+                selectedPartnerId={selectedPartnerId}
+                onSelectPartner={(id) => {
+                  setSelectedPartnerId(id);
+                  try {
+                    localStorage.setItem("jackpot_bot_partner", id);
+                  } catch {}
+                }}
+                botDifficulty={botDifficulty}
+                onChangeDifficulty={(diff) => {
+                  setBotDifficulty(diff);
+                  try {
+                    localStorage.setItem("jackpot_bot_diff", diff);
+                  } catch {}
+                }}
+                offlineTeamName={offlineTeamName}
+                setOfflineTeamName={setOfflineTeamName}
+                isGuest={isGuest}
+                onPromptAccount={() => {
+                  setAuthUsername(nickname || "Player");
+                  setAuthModalOpen(true);
+                }}
+                onStartOfflinePlay={() => handlePlayOffline()}
+                onBack={() => navigate("home")}
               />
             </div>
           </section>
@@ -2042,47 +2893,19 @@ export function JackpotApp() {
               "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
             } as React.CSSProperties}
           >
-            <header className="jackpot-nav">
-              <div
-                className="jackpot-wordmark"
-                onClick={() => navigate("home")}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>PLAY · PASS · WIN</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <details className="profile-menu">
-                  <summary aria-label={`Open player profile for ${nickname || "Player"}`}>
-                    <span className="profile-avatar">{(nickname.trim()[0] || "M").toUpperCase()}</span>
-                    <span className="profile-name">{nickname || "Player"}</span>
-                    <svg className="profile-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                      <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="profile-popover">
-                    <span className="mini-tag">GUEST PROFILE</span>
-                    <label htmlFor="create-profile-player-name">Display name</label>
-                    <input
-                      id="create-profile-player-name"
-                      value={profileDraft}
-                      maxLength={MAX_PLAYER_NAME_LENGTH}
-                      onChange={(event) => setProfileDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void saveProfileName();
-                      }}
-                    />
-                    <button type="button" className="ghost-btn" onClick={() => void saveProfileName()}>
-                      Update Name
-                    </button>
-                  </div>
-                </details>
-              </div>
-            </header>
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              showBack
+              onBack={() => navigate("home")}
+              onNavigateHome={() => navigate("home")}
+            />
 
             <div className="jackpot-subpage-content">
               {createdInviteCode ? (
@@ -2244,15 +3067,6 @@ export function JackpotApp() {
                 </div>
               )}
             </div>
-
-            <footer className="jackpot-footer">
-              <div>
-                <span>♟</span> 4–8 Players <i /> <span>◎</span> Online Multiplayer
-              </div>
-              <button type="button" onClick={() => navigate("howto")}>
-                Same cards. Different stories.
-              </button>
-            </footer>
           </section>
         )}
 
@@ -2264,47 +3078,19 @@ export function JackpotApp() {
               "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
             } as React.CSSProperties}
           >
-            <header className="jackpot-nav">
-              <div
-                className="jackpot-wordmark"
-                onClick={() => navigate("home")}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>PLAY · PASS · WIN</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <details className="profile-menu">
-                  <summary aria-label={`Open player profile for ${nickname || "Player"}`}>
-                    <span className="profile-avatar">{(nickname.trim()[0] || "M").toUpperCase()}</span>
-                    <span className="profile-name">{nickname || "Player"}</span>
-                    <svg className="profile-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                      <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="profile-popover">
-                    <span className="mini-tag">GUEST PROFILE</span>
-                    <label htmlFor="join-profile-player-name">Display name</label>
-                    <input
-                      id="join-profile-player-name"
-                      value={profileDraft}
-                      maxLength={MAX_PLAYER_NAME_LENGTH}
-                      onChange={(event) => setProfileDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void saveProfileName();
-                      }}
-                    />
-                    <button type="button" className="ghost-btn" onClick={() => void saveProfileName()}>
-                      Update Name
-                    </button>
-                  </div>
-                </details>
-              </div>
-            </header>
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              showBack
+              onBack={() => navigate("home")}
+              onNavigateHome={() => navigate("home")}
+            />
 
             <div className="jackpot-subpage-content">
               <div className="room-action-card">
@@ -2417,15 +3203,6 @@ export function JackpotApp() {
                 </div>
               </div>
             </div>
-
-            <footer className="jackpot-footer">
-              <div>
-                <span>♟</span> 4–8 Players <i /> <span>◎</span> Online Multiplayer
-              </div>
-              <button type="button" onClick={() => navigate("howto")}>
-                Same cards. Different stories.
-              </button>
-            </footer>
           </section>
         )}
 
@@ -2437,47 +3214,17 @@ export function JackpotApp() {
               "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
             } as React.CSSProperties}
           >
-            <header className="jackpot-nav">
-              <div
-                className="jackpot-wordmark"
-                onClick={() => navigate("home")}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>PLAY · PASS · WIN</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <details className="profile-menu">
-                  <summary aria-label={`Open player profile for ${nickname || "Player"}`}>
-                    <span className="profile-avatar">{(nickname.trim()[0] || "M").toUpperCase()}</span>
-                    <span className="profile-name">{nickname || "Player"}</span>
-                    <svg className="profile-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                      <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="profile-popover">
-                    <span className="mini-tag">GUEST PROFILE</span>
-                    <label htmlFor="lobby-profile-player-name">Display name</label>
-                    <input
-                      id="lobby-profile-player-name"
-                      value={profileDraft}
-                      maxLength={MAX_PLAYER_NAME_LENGTH}
-                      onChange={(event) => setProfileDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void saveProfileName();
-                      }}
-                    />
-                    <button type="button" className="ghost-btn" onClick={() => void saveProfileName()}>
-                      Update Name
-                    </button>
-                  </div>
-                </details>
-              </div>
-            </header>
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              onNavigateHome={handleExitHome}
+            />
 
             {!room ? (
               <div className="jackpot-subpage-content">
@@ -2549,6 +3296,56 @@ export function JackpotApp() {
                     </button>
                   </div>
                 </div>
+
+                {/* Compact Bot Difficulty Selector for Practice / Solo Rooms */}
+                {(roomCode.toLowerCase() === "practice" || room?.code?.toUpperCase() === "PRACTICE") && (
+                  <div className="diff-compact-bar">
+                    <span className="diff-compact-label">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                      </svg>
+                      AI Difficulty
+                    </span>
+                    <div className="diff-compact-pills" role="radiogroup" aria-label="AI Difficulty">
+                      <button
+                        type="button"
+                        className={`diff-pill-btn ${botDifficulty === "easy" ? "active easy" : ""}`}
+                        onClick={() => {
+                          setBotDifficulty("easy");
+                          try { localStorage.setItem("jackpot_bot_diff", "easy"); } catch {}
+                        }}
+                      >
+                        <span className="diff-dot easy" />
+                        <span>Easy</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`diff-pill-btn ${botDifficulty === "normal" ? "active normal" : ""}`}
+                        onClick={() => {
+                          setBotDifficulty("normal");
+                          try { localStorage.setItem("jackpot_bot_diff", "normal"); } catch {}
+                        }}
+                      >
+                        <span className="diff-dot normal" />
+                        <span>Normal</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`diff-pill-btn ${botDifficulty === "hard" ? "active hard" : ""}`}
+                        onClick={() => {
+                          setBotDifficulty("hard");
+                          try { localStorage.setItem("jackpot_bot_diff", "hard"); } catch {}
+                        }}
+                      >
+                        <span className="diff-dot hard" />
+                        <span>Hard</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Main Split Grid: Left Seats, Right Chat */}
                 <div className="lobby-main-grid">
@@ -2652,25 +3449,6 @@ export function JackpotApp() {
                       )}
                     </div>
 
-                    {/* Quick Lobby Chat Suggestions */}
-                    <div className="lobby-quick-chips">
-                      {[
-                        "👋 Ready to play!",
-                        "⚔️ Let's do this!",
-                        "👑 Host, start when ready!",
-                        "🤝 Good luck everyone!",
-                      ].map((phrase) => (
-                        <button
-                          type="button"
-                          key={phrase}
-                          className="lobby-quick-chip"
-                          onClick={() => sendLobbyMessage(phrase)}
-                        >
-                          {phrase}
-                        </button>
-                      ))}
-                    </div>
-
                     <form className="lobby-chat-input-bar" onSubmit={(event) => { event.preventDefault(); sendLobbyMessage(); }}>
                       <div className="name-input-well chat-input-well">
                         <input
@@ -2745,15 +3523,6 @@ export function JackpotApp() {
                 {status ? <p className="form-error lobby-status-msg" role="status">{status}</p> : null}
               </div>
             )}
-
-            <footer className="jackpot-footer">
-              <div>
-                <span>♟</span> 4–8 Players <i /> <span>◎</span> Online Multiplayer
-              </div>
-              <button type="button" onClick={() => navigate("howto")}>
-                Same cards. Different stories.
-              </button>
-            </footer>
           </section>
         )}
 
@@ -2768,47 +3537,17 @@ export function JackpotApp() {
               "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
             } as React.CSSProperties}
           >
-            <header className="jackpot-nav">
-              <div
-                className="jackpot-wordmark"
-                onClick={handleExitHome}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>PLAY · PASS · WIN</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <details className="profile-menu">
-                  <summary aria-label={`Open player profile for ${nickname || "Player"}`}>
-                    <span className="profile-avatar">{(nickname.trim()[0] || "M").toUpperCase()}</span>
-                    <span className="profile-name">{nickname || "Player"}</span>
-                    <svg className="profile-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                      <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="profile-popover">
-                    <span className="mini-tag">GUEST PROFILE</span>
-                    <label htmlFor="teams-profile-player-name">Display name</label>
-                    <input
-                      id="teams-profile-player-name"
-                      value={profileDraft}
-                      maxLength={MAX_PLAYER_NAME_LENGTH}
-                      onChange={(event) => setProfileDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void saveProfileName();
-                      }}
-                    />
-                    <button type="button" className="ghost-btn" onClick={() => void saveProfileName()}>
-                      Update Name
-                    </button>
-                  </div>
-                </details>
-              </div>
-            </header>
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              onNavigateHome={handleExitHome}
+            />
 
             <div className="jackpot-subpage-content">
               <div className="room-action-card team-modal-card">
@@ -3010,15 +3749,6 @@ export function JackpotApp() {
                 {status ? <p className="form-error" role="status">{status}</p> : null}
               </div>
             </div>
-
-            <footer className="jackpot-footer">
-              <div>
-                <span>♟</span> 4–8 Players <i /> <span>◎</span> Online Multiplayer
-              </div>
-              <button type="button" onClick={() => navigate("howto")}>
-                Same cards. Different stories.
-              </button>
-            </footer>
           </section>
         )}
 
@@ -3030,47 +3760,17 @@ export function JackpotApp() {
               "--landing-bg-mobile": `url("${mobileLandingBackground.src}")`,
             } as React.CSSProperties}
           >
-            <header className="jackpot-nav">
-              <div
-                className="jackpot-wordmark"
-                onClick={handleExitHome}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>PLAY · PASS · WIN</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <details className="profile-menu">
-                  <summary aria-label={`Open player profile for ${nickname || "Player"}`}>
-                    <span className="profile-avatar">{(nickname.trim()[0] || "M").toUpperCase()}</span>
-                    <span className="profile-name">{nickname || "Player"}</span>
-                    <svg className="profile-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                      <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="profile-popover">
-                    <span className="mini-tag">GUEST PROFILE</span>
-                    <label htmlFor="secret-profile-name">Display name</label>
-                    <input
-                      id="secret-profile-name"
-                      value={profileDraft}
-                      maxLength={MAX_PLAYER_NAME_LENGTH}
-                      onChange={(event) => setProfileDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void saveProfileName();
-                      }}
-                    />
-                    <button type="button" className="ghost-btn" onClick={() => void saveProfileName()}>
-                      Update Name
-                    </button>
-                  </div>
-                </details>
-              </div>
-            </header>
+            <JackpotNavBar
+              nickname={nickname}
+              profileDraft={profileDraft}
+              setProfileDraft={setProfileDraft}
+              saveProfileName={saveProfileName}
+              settingsStatus={settingsStatus}
+              account={account}
+              onOpenAuth={() => { setAuthUsername(nickname || "Player"); setAuthModalOpen(true); }}
+              onOpenProfileSetup={() => setProfileSetupOpen(true)}
+              onNavigateHome={handleExitHome}
+            />
 
             <div className="jackpot-subpage-content secret-subpage-content">
               <div className="secret-room-container">
@@ -3149,246 +3849,161 @@ export function JackpotApp() {
                   </div>
                 )}
 
-                {/* 2-Column Main Layout: Left = Strategy Chat & Live Preview; Right = Signal Chooser & Confirmation */}
-                <div className="secret-main-grid">
-                  {/* Left Column: Chat & Preview */}
-                  <div className="secret-left-column">
-                    {/* Discuss your strategy Card */}
-                    <div className="secret-card secret-chat-card">
-                      <div className="secret-card-header">
-                        <div className="secret-header-title">
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                          </svg>
-                          <span>Discuss your strategy</span>
-                        </div>
-                        <span className="secret-header-subtitle">Private with {partnerName}</span>
+                {/* Main Layout: Signal Chooser & Confirmation */}
+                <div className="secret-main-grid single-column">
+                  <div className="secret-card signal-chooser-card">
+                    <div className="secret-card-header">
+                      <div className="secret-header-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                        </svg>
+                        <span>Choose your signal</span>
                       </div>
-
-                      {/* Chat Messages Feed */}
-                      <div className="secret-chat-feed" ref={teamChatRef} aria-live="polite">
-                        {teamChat.length === 0 ? (
-                          <div className="secret-chat-empty">
-                            <span className="empty-whisper-icon">🤫</span>
-                            <p>Private team strategy channel. Coordinate when to flash your signal or how to mislead the opposing team!</p>
-                          </div>
-                        ) : (
-                          teamChat.map((msg) => {
-                            const isMe = msg.playerId === session?.playerId;
-                            return (
-                              <div key={msg.id} className={`chat-bubble-row ${isMe ? "outgoing" : "incoming"}`}>
-                                {!isMe && (
-                                  <span className="chat-avatar-disc" aria-hidden="true">
-                                    {msg.nickname.slice(0, 1).toUpperCase()}
-                                  </span>
-                                )}
-                                <div className="chat-bubble-content">
-                                  {!isMe && <span className="chat-author-name">{msg.nickname}</span>}
-                                  <div className={`chat-bubble ${isMe ? "outgoing-bubble" : "incoming-bubble"}`}>
-                                    <p>{msg.text}</p>
-                                    {msg.createdAt ? (
-                                      <span className="chat-bubble-timestamp">{formatMessageTime(msg.createdAt)}</span>
-                                    ) : null}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-
-                      {/* Quick Strategy Suggestion Chips */}
-                      <div className="strategy-quick-chips">
-                        {[
-                          "Flash right after a pass",
-                          "I'll flash on 4 of a kind",
-                          "Watch my eyes after cards",
-                          "Pass circles / stars to me",
-                          "Fake signal if suspected",
-                          "Ready to call Jackpot!",
-                        ].map((suggestion) => (
-                          <button
-                            type="button"
-                            key={suggestion}
-                            className="strategy-chip"
-                            onClick={() => sendPrivateChatMessage(suggestion)}
-                            disabled={strategySeconds === 0}
-                          >
-                            + {suggestion}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Chat Input */}
-                      <form
-                        className="secret-chat-input-bar"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          sendPrivateChatMessage();
-                        }}
-                      >
-                        <div className="name-input-well chat-input-well">
-                          <input
-                            value={teamChatDraft}
-                            onChange={(event) => setTeamChatDraft(event.target.value)}
-                            maxLength={280}
-                            placeholder={`Message ${partnerName}...`}
-                            aria-label="Private message to partner"
-                          />
-                          {teamChatDraft.length > 0 && (
-                            <span className="chat-char-counter">{teamChatDraft.length}/280</span>
-                          )}
-                        </div>
-                        <button
-                          type="submit"
-                          className="chat-send-btn"
-                          disabled={!teamChatDraft.trim() || strategySeconds === 0}
-                          aria-label="Send private message"
-                        >
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <line x1="22" y1="2" x2="11" y2="13" />
-                            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                          </svg>
-                          <span>Send</span>
-                        </button>
-                      </form>
+                      <span className="secret-header-subtitle">Select a secret cue to flash at the table</span>
                     </div>
-                  </div>
 
-                  {/* Right Column: Choose Your Signal */}
-                  <div className="secret-right-column">
-                    <div className="secret-card signal-chooser-card">
-                      <div className="secret-card-header">
-                        <div className="secret-header-title">
-                          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                          </svg>
-                          <span>Choose your signal</span>
-                        </div>
-                        <span className="secret-header-subtitle">Select a secret cue to flash at the table</span>
-                      </div>
+                    {/* Category Filter Chips */}
+                    <div className="signal-filter-chips">
+                      {(["All", "Gesture", "Facial", "Subtle"] as const).map((cat) => (
+                        <button
+                          type="button"
+                          key={cat}
+                          className={`filter-chip ${signalCategoryFilter === cat ? "active" : ""}`}
+                          onClick={() => setSignalCategoryFilter(cat)}
+                        >
+                          {cat}
+                        </button>
+                      ))}
+                    </div>
 
-                      {/* Category Filter Chips */}
-                      <div className="signal-filter-chips">
-                        {(["All", "Gesture", "Facial", "Subtle"] as const).map((cat) => (
+                    {/* Signals Grid */}
+                    <div className="secret-signals-grid">
+                      {filteredSignals.map((signal) => {
+                        const isSelected = selectedSignal === signal.id;
+                        return (
                           <button
                             type="button"
-                            key={cat}
-                            className={`filter-chip ${signalCategoryFilter === cat ? "active" : ""}`}
-                            onClick={() => setSignalCategoryFilter(cat)}
+                            key={signal.id}
+                            className={`secret-signal-card ${isSelected ? "selected" : ""}`}
+                            onClick={() => {
+                              playCue("card_click");
+                              setSelectedSignal(signal.id);
+                              if (!localSignalConfirmed) {
+                                void updateTeamPrivate({ signal: signal.id });
+                              }
+                            }}
+                            disabled={tableLaunchCountdown !== null}
                           >
-                            {cat}
+                            <div className="signal-card-top">
+                              <span className="signal-card-symbol">{signal.symbol}</span>
+                              <span className={`stealth-micro-tag ${signal.stealthLevel.toLowerCase()}`}>
+                                {signal.stealthLevel}
+                              </span>
+                            </div>
+                            <strong className="signal-card-name">{signal.label}</strong>
+                            <span className="signal-card-sub">{signal.description}</span>
+                            {isSelected && <span className="selected-check-badge">✓ Selected</span>}
                           </button>
-                        ))}
-                      </div>
+                        );
+                      })}
+                    </div>
 
-                      {/* Signals Grid */}
-                      <div className="secret-signals-grid">
-                        {filteredSignals.map((signal) => {
-                          const isSelected = selectedSignal === signal.id;
-                          return (
+                    {/* Independent Confirmation Footer */}
+                    <div className="secret-confirmation-dock">
+                      {(() => {
+                        const isConfirmed = localSignalConfirmed || Boolean(session?.playerId && teamSignalAgreements[session.playerId]);
+                        return (
+                          <>
+                            <div className="confirmation-status-line">
+                              {allTeamsLocked ? (
+                                <span className="locked-pill">🔒 ALL TEAMS LOCKED · ENTERING TABLE</span>
+                              ) : teamSignalLocked ? (
+                                <span className="waiting-pill locked-wait">
+                                  <span className="pulse-dot green" />
+                                  🔒 Signal Locked ✓ Waiting for other team...
+                                </span>
+                              ) : isConfirmed ? (
+                                <span className="waiting-pill">
+                                  <span className="pulse-dot green" />
+                                  Signal selected ✓ Waiting for {partnerName}...
+                                </span>
+                              ) : (
+                                <span className="prompt-pill">
+                                  Selected: <strong>{selectedSignalMeta.label}</strong> · Confirm when ready
+                                </span>
+                              )}
+                            </div>
+
                             <button
                               type="button"
-                              key={signal.id}
-                              className={`secret-signal-card ${isSelected ? "selected" : ""}`}
-                              onClick={() => {
-                                playCue("card_click");
-                                setSelectedSignal(signal.id);
-                                if (!localSignalConfirmed) {
-                                  void updateTeamPrivate({ signal: signal.id });
-                                }
-                              }}
-                              disabled={tableLaunchCountdown !== null}
+                              className={`game-primary-btn confirm-signal-btn ${isConfirmed || teamSignalLocked ? "confirmed" : ""}`}
+                              disabled={isConfirmed || teamSignalLocked || tableLaunchCountdown !== null || strategySeconds === 0}
+                              onClick={confirmSecretSignal}
                             >
-                              <div className="signal-card-top">
-                                <span className="signal-card-symbol">{signal.symbol}</span>
-                                <span className={`stealth-micro-tag ${signal.stealthLevel.toLowerCase()}`}>
-                                  {signal.stealthLevel}
-                                </span>
-                              </div>
-                              <strong className="signal-card-name">{signal.label}</strong>
-                              <span className="signal-card-sub">{signal.description}</span>
-                              {isSelected && <span className="selected-check-badge">✓ Selected</span>}
+                              {allTeamsLocked
+                                ? "All Teams Ready! ✓"
+                                : teamSignalLocked
+                                  ? "Waiting for other team..."
+                                  : isConfirmed
+                                    ? "Signal selected ✓"
+                                    : `CONFIRM SIGNAL: ${selectedSignalMeta.label.toUpperCase()} ✓`}
                             </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Independent Confirmation Footer */}
-                      <div className="secret-confirmation-dock">
-                        {(() => {
-                          const isConfirmed = localSignalConfirmed || Boolean(session?.playerId && teamSignalAgreements[session.playerId]);
-                          return (
-                            <>
-                              <div className="confirmation-status-line">
-                                {allTeamsLocked ? (
-                                  <span className="locked-pill">🔒 ALL TEAMS LOCKED · ENTERING TABLE</span>
-                                ) : teamSignalLocked ? (
-                                  <span className="waiting-pill locked-wait">
-                                    <span className="pulse-dot green" />
-                                    🔒 Signal Locked ✓ Waiting for other team...
-                                  </span>
-                                ) : isConfirmed ? (
-                                  <span className="waiting-pill">
-                                    <span className="pulse-dot green" />
-                                    Signal selected ✓ Waiting for {partnerName}...
-                                  </span>
-                                ) : (
-                                  <span className="prompt-pill">
-                                    Selected: <strong>{selectedSignalMeta.label}</strong> · Confirm when ready
-                                  </span>
-                                )}
-                              </div>
-
-                              <button
-                                type="button"
-                                className={`game-primary-btn confirm-signal-btn ${isConfirmed || teamSignalLocked ? "confirmed" : ""}`}
-                                disabled={isConfirmed || teamSignalLocked || tableLaunchCountdown !== null || strategySeconds === 0}
-                                onClick={confirmSecretSignal}
-                              >
-                                {allTeamsLocked
-                                  ? "All Teams Ready! ✓"
-                                  : teamSignalLocked
-                                    ? "Waiting for other team..."
-                                    : isConfirmed
-                                      ? "Signal selected ✓"
-                                      : `CONFIRM SIGNAL: ${selectedSignalMeta.label.toUpperCase()} ✓`}
-                              </button>
-                            </>
-                          );
-                        })()}
-                      </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
 
                 {/* Dramatic 3... 2... 1... TABLE! Countdown Overlay */}
                 {tableLaunchCountdown !== null && (
-                  <div className="table-launch-overlay" role="dialog" aria-modal="true">
-                    <div className="launch-box">
-                      <div className="launch-pulse-ring" />
-                      <span className="launch-lock-icon">🔒</span>
-                      <h2 className="launch-title">ALL TEAMS READY!</h2>
-                      <p className="launch-subtitle">All players confirmed! Entering the match...</p>
-                      <div className="launch-countdown-circle">
-                        <span className="launch-number">
-                          {tableLaunchCountdown > 0 ? tableLaunchCountdown : "TABLE!"}
-                        </span>
+                  <div className="table-launch-overlay" role="dialog" aria-modal="true" aria-live="assertive">
+                    <div className="launch-box-pro">
+                      <div className="launch-ambient-pulse" />
+                      <div className="launch-radar-ring" />
+
+                      <div className="launch-header-badge">
+                        <span className="launch-live-dot" />
+                        <span>ALL TEAMS READY</span>
+                      </div>
+
+                      <h2 className="launch-hero-title">ENTERING TABLE</h2>
+                      <p className="launch-hero-desc">
+                        Secret partner cues locked · Shuffling cards for Round {round}...
+                      </p>
+
+                      <div className={`launch-dial-stage ${tableLaunchCountdown === 0 ? "dial-table-active" : ""}`}>
+                        <div className="launch-dial-ring-outer" />
+                        <div className="launch-dial-ring-inner" />
+                        <div className="launch-dial-core">
+                          {tableLaunchCountdown > 0 ? (
+                            <span key={tableLaunchCountdown} className="launch-count-number">
+                              {tableLaunchCountdown}
+                            </span>
+                          ) : (
+                            <div className="launch-table-burst">
+                              <span className="burst-crown">♛</span>
+                              <strong className="burst-text">TABLE!</strong>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="launch-team-status-strip">
+                        <div className="launch-team-pill alpha">
+                          <span className="pill-dot" />
+                          <span>Team Alpha: Ready ✓</span>
+                        </div>
+                        <div className="launch-team-pill bravo">
+                          <span className="pill-dot" />
+                          <span>Team Bravo: Ready ✓</span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
             </div>
-
-            <footer className="jackpot-footer">
-              <div>
-                <span>♟</span> 4–8 Players <i /> <span>◎</span> Online Multiplayer
-              </div>
-              <button type="button" onClick={() => navigate("howto")}>
-                Same cards. Different stories.
-              </button>
-            </footer>
           </section>
         )}
 
@@ -3405,7 +4020,7 @@ export function JackpotApp() {
 
         {screen === "table" && game && you && (
           <section className={`table-screen ${signalFlash ? "signal-flash" : ""} ${signalWindowActive ? "has-signal-pressure" : ""}`}>
-            {/* Topbar with JACKPOT Raceboard */}
+            {/* Sleek Minimal In-Game Topbar: Essential HUD Only */}
             <header className="table-topbar">
               <div className="table-topbar-row-header">
                 <div className="table-topbar-left">
@@ -3417,31 +4032,60 @@ export function JackpotApp() {
                     aria-label="End game session"
                   >
                     <span className="end-session-icon" aria-hidden="true">🚪</span>
-                    <span className="end-session-label">End Session</span>
+                    <span className="end-session-label">Exit</span>
                   </button>
-                  <div className="table-user-badge">
-                    <span className={`viewer-dot ${you.team.toLowerCase()}`} />
-                    <span className="viewer-name-val">{nickname || you.name}</span>
-                    <span className={`viewer-team-tag ${you.team.toLowerCase()}`}>{you.team}</span>
+                </div>
+
+                {/* Center: Live Match Scoreboard + Secret Cue Reminder */}
+                <div className="topbar-center">
+                  <div
+                    className="topbar-scoreboard"
+                    role="status"
+                    aria-label={`Match score: Alpha ${scores.Alpha || 0}, Bravo ${scores.Bravo || 0}, Round ${round}`}
+                  >
+                    <div className={`score-badge alpha ${you.team === "Alpha" ? "is-your-team" : ""}`} title={`Team ${roomCode === "practice" || localMatchRef.current ? offlineTeamName : "Alpha"}: ${scores.Alpha || 0}/7 letters`}>
+                      <span className="team-dot alpha" />
+                      <span className="team-abbr">{roomCode === "practice" || localMatchRef.current ? offlineTeamName : "Alpha"}</span>
+                      <strong className="team-count">{scores.Alpha || 0}</strong>
+                    </div>
+
+                    <div className="scoreboard-mid-pill">
+                      <span className="round-text">RD {round}</span>
+                    </div>
+
+                    <div className={`score-badge bravo ${you.team === "Bravo" ? "is-your-team" : ""}`} title={`Team Bravo: ${scores.Bravo || 0}/7 letters`}>
+                      <strong className="team-count">{scores.Bravo || 0}</strong>
+                      <span className="team-abbr">Bravo</span>
+                      <span className="team-dot bravo" />
+                    </div>
                   </div>
+
+                  {/* Secret Partner Cue Reminder (Clicking opens menu for details) */}
+                  <button
+                    type="button"
+                    className="table-team-signal-pill"
+                    onClick={() => setTableMenuOpen(true)}
+                    title={`Private cue: ${selectedSignalMeta.label}. Tap to view secret cue in match menu.`}
+                    aria-label={`Partner secret cue: ${selectedSignalMeta.label}`}
+                  >
+                    <span className="signal-pill-lock">🤝</span>
+                    <span className="signal-pill-icon">{selectedSignalMeta.symbol}</span>
+                    <span className="signal-pill-name">{selectedSignalMeta.label}</span>
+                  </button>
                 </div>
 
-                <div className="mobile-round-indicator">
-                  <span className="mobile-round-tag">ROUND {round}</span>
-                </div>
-
-                {/* Topbar Right Tools */}
+                {/* Right: Quick React + Table Menu Toggle */}
                 <div className="table-topbar-right">
-                  <MiniMusicPlayer />
                   <div className="reaction-dropdown-anchor">
                     <button
                       type="button"
                       className={`table-react-toggle ${reactionMenuOpen ? "active" : ""}`}
                       aria-expanded={reactionMenuOpen}
                       onClick={() => setReactionMenuOpen((o) => !o)}
+                      title="React"
                     >
                       <span>😊</span>
-                      <span>React</span>
+                      <span className="react-toggle-label">React</span>
                     </button>
                     {reactionMenuOpen && (
                       <div className="reaction-picker-bubble" role="group" aria-label="Quick reactions">
@@ -3461,59 +4105,21 @@ export function JackpotApp() {
                       </div>
                     )}
                   </div>
-                </div>
-              </div>
 
-              {/* JACKPOT Race Board */}
-              <div className="table-race-board">
-                {/* Team Alpha */}
-                <div className={`race-team-col alpha ${you.team === "Alpha" ? "is-your-team" : ""}`}>
-                  <div className="race-team-header">
-                    <span className="race-team-dot alpha" />
-                    <span className="race-team-name">Alpha</span>
-                    <span className="race-team-score-num">{scores.Alpha || 0}/7</span>
-                  </div>
-                  <div className="race-letters-row" aria-label={`Team Alpha score ${scores.Alpha || 0} of 7`}>
-                    {JACKPOT_LETTERS.map((letter, idx) => {
-                      const isEarned = (scores.Alpha || 0) > idx;
-                      return (
-                        <span
-                          key={`alpha-letter-${letter}-${idx}`}
-                          className={`jackpot-letter-pill ${isEarned ? "earned" : "unearned"}`}
-                        >
-                          {letter}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Round Badge Center (Desktop) */}
-                <div className="race-center-pill">
-                  <span className="race-round-number">ROUND {round}</span>
-                  <span className="race-target-sub">FIRST TO SPELL JACKPOT</span>
-                </div>
-
-                {/* Team Bravo */}
-                <div className={`race-team-col bravo ${you.team === "Bravo" ? "is-your-team" : ""}`}>
-                  <div className="race-team-header">
-                    <span className="race-team-dot bravo" />
-                    <span className="race-team-name">Bravo</span>
-                    <span className="race-team-score-num">{scores.Bravo || 0}/7</span>
-                  </div>
-                  <div className="race-letters-row" aria-label={`Team Bravo score ${scores.Bravo || 0} of 7`}>
-                    {JACKPOT_LETTERS.map((letter, idx) => {
-                      const isEarned = (scores.Bravo || 0) > idx;
-                      return (
-                        <span
-                          key={`bravo-letter-${letter}-${idx}`}
-                          className={`jackpot-letter-pill ${isEarned ? "earned" : "unearned"}`}
-                        >
-                          {letter}
-                        </span>
-                      );
-                    })}
-                  </div>
+                  {/* Table Menu Toggle Button */}
+                  <button
+                    type="button"
+                    className={`table-menu-toggle-btn ${tableMenuOpen ? "active" : ""}`}
+                    onClick={() => setTableMenuOpen(true)}
+                    title="Match Menu, Music & Details"
+                    aria-label="Open match details and settings"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <line x1="3" y1="12" x2="21" y2="12" />
+                      <line x1="3" y1="6" x2="21" y2="6" />
+                      <line x1="3" y1="18" x2="21" y2="18" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             </header>
@@ -3542,32 +4148,97 @@ export function JackpotApp() {
                   </div>
                 ) : null}
 
-                {/* Center Table Void with Turn Info */}
+                {/* Center Table Stage: Live Signal Broadcasts, Complete Card Alerts & Turn Info */}
                 <div className="table-center-void">
-                  <div className="table-crown" aria-hidden>♛</div>
-                  <span className="void-mark">JACKPOT TABLE</span>
+                  {/* 1. Active Live Signal Broadcast (Middle of Table Alert - Neutral & Unspoiled) */}
+                  {activeSignalBurst ? (
+                    <div
+                      key={activeSignalBurst.id}
+                      className="center-signal-broadcast table-alert-card"
+                      role="alert"
+                    >
+                      <div className="broadcast-header-tag">
+                        <span>👁️ SIGNAL</span>
+                      </div>
 
-                  {/* Turn Callout */}
-                  <div className={`center-turn-indicator ${isYourPass ? "turn-you" : ""}`}>
-                    {isYourPass ? (
-                      <span className="turn-text highlight">
-                        YOUR TURN ↗ Pass to {passReceiver?.name ?? "next player"}
-                      </span>
-                    ) : (
-                      <span className="turn-text">
-                        {activePlayer?.name ?? "Player"} passing → {passReceiver?.name ?? "next player"}
-                      </span>
-                    )}
-                  </div>
+                      <div className="broadcast-body">
+                        <span className="broadcast-symbol-glow">{activeSignalBurst.symbol}</span>
+                        <div className="broadcast-text-stack">
+                          <strong className="broadcast-main-heading">
+                            {activeSignalBurst.playerName} raised a signal
+                          </strong>
+                        </div>
 
-                  {/* Private 4-of-a-kind alert for viewer only */}
-                  {yourFour ? (
-                    <div className="center-jackpot-ready-pill" role="status">
-                      <span className="ready-sparkle">⚡</span>
-                      <strong>JACKPOT READY!</strong>
-                      <span>You have four {yourFour}s. Flash your signal!</span>
+                        {/* Instant reflex actions */}
+                        {activeSignalBurst.playerId === partner?.id && (
+                          <button
+                            type="button"
+                            className="center-quick-action-btn jackpot-action"
+                            onClick={onJackpot}
+                          >
+                            ♛ CALL JACKPOT!
+                          </button>
+                        )}
+                        {activeSignalBurst.playerId !== partner?.id && activeSignalBurst.playerId !== viewerPlayerId && (
+                          <button
+                            type="button"
+                            className="center-quick-action-btn suspect-action"
+                            disabled={suspectAttemptsLeft <= 0}
+                            onClick={() => onSuspect(activeSignalBurst.playerId)}
+                          >
+                            🚨 SUSPECT! ({suspectAttemptsLeft})
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  ) : null}
+                  ) : yourFour ? (
+                    /* 2. Complete Card Alert (Middle of Table Alert) */
+                    <div
+                      className={`center-cards-alert table-alert-card ${(you?.hand.length ?? 0) > 4 ? "has-fifth-card" : "ready-to-signal"}`}
+                      role="status"
+                    >
+                      {(you?.hand.length ?? 0) > 4 ? (
+                        <>
+                          <span className="center-alert-symbol">⚠️</span>
+                          <div className="center-alert-text">
+                            <strong className="center-alert-heading">Pass 5th card to signal</strong>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <span className="center-alert-symbol">⚡</span>
+                          <div className="center-alert-text">
+                            <strong className="center-alert-heading">Ready to signal {partnerName}</strong>
+                          </div>
+                          <button
+                            type="button"
+                            className="center-quick-action-btn signal-action"
+                            onClick={onSignal}
+                          >
+                            {selectedSignalMeta.symbol} FLASH SIGNAL
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    /* 3. Default Center Void with Turn Callout */
+                    <>
+                      <div className="table-crown" aria-hidden>♛</div>
+                      <span className="void-mark">JACKPOT TABLE</span>
+
+                      <div className={`center-turn-indicator ${isYourPass ? "turn-you" : ""}`}>
+                        {isYourPass ? (
+                          <span className="turn-text highlight">
+                            YOUR TURN ↗ Pass to {passReceiver?.name ?? "next player"}
+                          </span>
+                        ) : (
+                          <span className="turn-text">
+                            {activePlayer?.name ?? "Player"} passing → {passReceiver?.name ?? "next player"}
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Seated Players */}
@@ -3589,70 +4260,95 @@ export function JackpotApp() {
                       onSelectCard={(id) => {
                         playCue("card_click");
                         setSelectedCardId((prev) => (prev === id ? null : id));
+                        if (isTutorialMatch && (tutorialStep === "table_pick_card" || tutorialStep === "table_cards_intro")) {
+                          setTutorialStep("table_pass_first_card");
+                        }
                       }}
                       reaction={reactionBursts.filter((entry) => entry.playerId === player.id).at(-1)}
-                      hasFourOfAKind={player.id === viewerPlayerId && Boolean(yourFour)}
+                      hasFourOfAKind={player.id === viewerPlayerId && Boolean(yourFour) && player.hand.length === 4}
                       activeSignal={playerSignal}
+                      isTutorialPickCard={isTutorialMatch && (tutorialStep === "table_pick_card" || (tutorialStep === "table_cards_intro" && !selectedCardId))}
+                      canSuspect={!busy && suspectAttemptsLeft > 0}
+                      onSuspectTarget={(targetId) => onSuspect(targetId)}
                     />
                   );
                 })}
 
-                {/* Bottom Action Dock */}
-                <div className="table-action-dock">
+                {/* Bottom Action Dock: Exactly 4 Actions, Zero Duplication */}
+                <div className="table-action-dock" role="region" aria-label="Game actions">
                   {/* PASS CARD */}
-                  <button
-                    type="button"
-                    className={`dock-action-btn pass ${isYourPass && selectedCardId ? "ready-to-pass" : ""}`}
-                    disabled={!isYourPass || !selectedCardId || busy}
-                    onClick={onPassSelected}
-                  >
-                    <div className="dock-btn-icon-wrap">↗</div>
-                    <div className="dock-btn-label-group">
-                      <strong>PASS CARD</strong>
-                      <small>{isYourPass ? (selectedCardId ? "Ready to pass card" : "Pick card from hand") : "Wait for your turn"}</small>
-                    </div>
-                  </button>
-
-                  {/* JACKPOT */}
-                  <button
-                    type="button"
-                    className="dock-action-btn jackpot"
-                    disabled={busy}
-                    onClick={onJackpot}
-                  >
-                    <div className="dock-btn-icon-wrap crown">♛</div>
-                    <div className="dock-btn-label-group">
-                      <strong>JACKPOT!</strong>
-                      <small>Teammate has 4 of a kind</small>
-                    </div>
-                  </button>
-
-                  {/* SIGNAL */}
-                  <div className="signal-dropdown-group">
+                  <div style={{ position: "relative", flex: 1, display: "flex" }}>
+                    {isTutorialMatch && tutorialStep === "table_pass_first_card" && (
+                      <div className="tutorial-dock-pointer" aria-hidden="true">
+                        <span className="pointer-finger">👉</span>
+                        <span className="pointer-label">TOUCH PASS</span>
+                      </div>
+                    )}
                     <button
                       type="button"
-                      className="dock-action-btn signal"
+                      className={`dock-action-btn pass ${isYourPass && selectedCardId ? "ready-to-pass" : ""} ${isTutorialMatch && tutorialStep === "table_pass_first_card" ? "tutorial-spotlight-btn" : ""}`}
+                      disabled={!isYourPass || !selectedCardId || busy}
+                      onClick={onPassSelected}
+                      title={isYourPass ? (selectedCardId ? "Pass selected card to next player" : "Select a card from hand") : "Wait for your turn"}
+                    >
+                      <span className="dock-btn-icon">↗</span>
+                      <span className="dock-btn-label-group">
+                        <strong>PASS</strong>
+                        <small className="dock-btn-sub">CARD</small>
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* JACKPOT */}
+                  <div style={{ position: "relative", flex: 1, display: "flex" }}>
+                    {isTutorialMatch && tutorialStep === "table_partner_signal_detected" && (
+                      <div className="tutorial-dock-pointer" aria-hidden="true">
+                        <span className="pointer-finger">🔥</span>
+                        <span className="pointer-label">CALL JACKPOT!</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className={`dock-action-btn jackpot ${isTutorialMatch && tutorialStep === "table_partner_signal_detected" ? "tutorial-spotlight-btn jackpot-glow" : ""}`}
+                      disabled={busy}
+                      onClick={onJackpot}
+                      title="Call JACKPOT when your partner flashes their cue!"
+                    >
+                      <span className="dock-btn-icon crown">♛</span>
+                      <span className="dock-btn-label-group">
+                        <strong>JACKPOT!</strong>
+                        <small className="dock-btn-sub">CALL</small>
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* SIGNAL */}
+                  <div className="signal-dropdown-group" style={{ flex: 1, display: "flex" }}>
+                    <button
+                      type="button"
+                      className={`dock-action-btn signal ${(you?.hand.length ?? 0) > 4 ? "has-fifth-card" : ""}`}
                       disabled={busy}
                       aria-expanded={signalMenuOpen}
                       onClick={() => setSignalMenuOpen((open) => !open)}
+                      title={(you?.hand.length ?? 0) > 4 ? "Pass 5th card first before signaling!" : "Flash or fake your secret cue"}
                     >
-                      <div className="dock-btn-icon-wrap">{selectedSignalMeta.symbol}</div>
-                      <div className="dock-btn-label-group">
-                        <strong>SIGNAL ▾</strong>
-                        <small>{selectedSignalMeta.label}</small>
-                      </div>
+                      <span className="dock-btn-icon">{selectedSignalMeta.symbol}</span>
+                      <span className="dock-btn-label-group">
+                        <strong>SIGNAL</strong>
+                        <small className="dock-btn-sub">CUE ▾</small>
+                      </span>
                     </button>
                     {signalMenuOpen && (
                       <div className="signal-dock-menu">
                         <button type="button" onClick={onSignal} className="signal-menu-item">
-                          <span>{selectedSignalMeta.symbol}</span>
+                          <span className="menu-cue-icon">{selectedSignalMeta.symbol}</span>
                           <div className="menu-text">
                             <strong>Flash Signal</strong>
                             <small>{selectedSignalMeta.label}</small>
                           </div>
                         </button>
                         <button type="button" onClick={onFakeSignal} className="signal-menu-item decoy">
-                          <span>🎭</span>
+                          <span className="menu-cue-icon">🎭</span>
                           <div className="menu-text">
                             <strong>Fake Signal</strong>
                             <small>Bluff decoy gesture</small>
@@ -3663,158 +4359,40 @@ export function JackpotApp() {
                   </div>
 
                   {/* SUSPECT */}
-                  <button
-                    type="button"
-                    className="dock-action-btn suspect"
-                    disabled={busy || suspectAttemptsLeft <= 0}
-                    onClick={onSuspect}
-                  >
-                    <div className="dock-btn-icon-wrap">!</div>
-                    <div className="dock-btn-label-group">
-                      <strong>SUSPECT ({suspectAttemptsLeft})</strong>
-                      <small>Catch opponent 4 of a kind</small>
-                    </div>
-                  </button>
+                  <div style={{ position: "relative", flex: 1, display: "flex" }}>
+                    {isTutorialMatch && tutorialStep === "round2_suspicious_gesture" && (
+                      <div className="tutorial-dock-pointer" aria-hidden="true">
+                        <span className="pointer-finger">🚨</span>
+                        <span className="pointer-label">TOUCH SUSPECT!</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className={`dock-action-btn suspect ${isTutorialMatch && tutorialStep === "round2_suspicious_gesture" ? "tutorial-spotlight-btn suspect-glow" : ""}`}
+                      disabled={busy || suspectAttemptsLeft <= 0}
+                      onClick={() => onSuspect()}
+                      title={`Call SUSPECT! Tap an opponent's profile directly or click here (${suspectAttemptsLeft} calls remaining).`}
+                    >
+                      <span className="dock-btn-icon">🎯</span>
+                      <span className="dock-btn-label-group">
+                        <strong>SUSPECT</strong>
+                        <small className="dock-btn-sub">({suspectAttemptsLeft})</small>
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Suspect Confirmation Modal */}
-            {suspectModalOpen && (
-              <div
-                className="table-modal-backdrop"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="suspect-modal-title"
-                onClick={(e) => {
-                  if (e.target === e.currentTarget) setSuspectModalOpen(false);
-                }}
-              >
-                <div className="table-modal-card suspect-modal">
-                  <div className="modal-badge-row">
-                    <span className="modal-micro-tag danger">INTERCEPTION CALL</span>
-                    <span className="modal-attempts-counter">{suspectAttemptsLeft} of 3 left</span>
-                  </div>
-
-                  <div className="modal-header-icon danger">
-                    <span className="header-icon-symbol">🚨</span>
-                  </div>
-
-                  <h3 id="suspect-modal-title">CALL SUSPECT ON OPPONENTS?</h3>
-                  <p className="modal-lead-text">
-                    Do you believe an opponent is holding <strong>four matching cards</strong> right now?
-                  </p>
-
-                  <div className="modal-rules-grid">
-                    <div className="modal-rule-card success">
-                      <div className="rule-card-header">
-                        <span className="rule-card-icon">✓</span>
-                        <strong>IF CORRECT</strong>
-                      </div>
-                      <p className="rule-card-desc">
-                        <strong>CAUGHT!</strong> Your team earns <strong>+1 letter</strong> towards JACKPOT.
-                      </p>
-                    </div>
-
-                    <div className="modal-rule-card penalty">
-                      <div className="rule-card-header">
-                        <span className="rule-card-icon">✗</span>
-                        <strong>IF WRONG</strong>
-                      </div>
-                      <p className="rule-card-desc">
-                        <strong>FALSE ALARM!</strong> You lose 1 attempt ({suspectAttemptsLeft} remaining).
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="modal-actions-row">
-                    <button
-                      type="button"
-                      className="table-modal-btn confirm-suspect-btn"
-                      onClick={executeSuspect}
-                    >
-                      <span className="btn-icon">🚨</span>
-                      <span>CALL IT NOW!</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="table-modal-btn cancel-btn"
-                      onClick={() => setSuspectModalOpen(false)}
-                    >
-                      Never mind
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Suspect 1-Second Suspense Reveal */}
+            {/* Suspect Quick Reveal Feedback */}
             {suspectRevealing && (
               <div className="table-suspense-overlay" aria-live="assertive">
                 <div className="suspense-card">
                   <div className="suspense-radar-ring" />
                   <span className="suspense-icon">🔍</span>
-                  <span className="suspense-eyebrow">RADAR SCAN</span>
+                  <span className="suspense-eyebrow">FASTEST FINGERS</span>
                   <h3>VERIFYING OPPONENT HANDS...</h3>
-                  <p>Searching table for four of a kind</p>
-                </div>
-              </div>
-            )}
-
-            {/* Jackpot Confirmation Modal */}
-            {jackpotModalOpen && (
-              <div
-                className="table-modal-backdrop"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="jackpot-modal-title"
-                onClick={(e) => {
-                  if (e.target === e.currentTarget) setJackpotModalOpen(false);
-                }}
-              >
-                <div className="table-modal-card jackpot-modal">
-                  <div className="modal-badge-row">
-                    <span className="modal-micro-tag gold">VICTORY DECLARATION</span>
-                  </div>
-
-                  <div className="modal-header-icon gold">
-                    <span className="header-icon-symbol">♛</span>
-                  </div>
-
-                  <h3 id="jackpot-modal-title">CALL JACKPOT FOR YOUR TEAM?</h3>
-                  <p className="modal-lead-text">
-                    Are you confident your teammate has collected <strong>four of a kind</strong>?
-                  </p>
-
-                  <div className="modal-rules-grid single">
-                    <div className="modal-rule-card gold">
-                      <div className="rule-card-header">
-                        <span className="rule-card-icon">♛</span>
-                        <strong>ROUND VICTORY STAKES</strong>
-                      </div>
-                      <p className="rule-card-desc">
-                        If your teammate holds all 4 matching cards, your team wins the round and earns <strong>+1 letter</strong> towards winning the match!
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="modal-actions-row">
-                    <button
-                      type="button"
-                      className="table-modal-btn confirm-jackpot-btn"
-                      onClick={executeJackpot}
-                    >
-                      <span className="btn-icon">♛</span>
-                      <span>CALL JACKPOT!</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="table-modal-btn cancel-btn"
-                      onClick={() => setJackpotModalOpen(false)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                  <p>Interception call dispatched!</p>
                 </div>
               </div>
             )}
@@ -3917,6 +4495,132 @@ export function JackpotApp() {
                       onClick={() => setExitConfirmOpen(false)}
                     >
                       Keep Playing
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+
+
+            {/* Table Match Menu & Details Modal */}
+            {tableMenuOpen && (
+              <div className="table-modal-backdrop table-menu-backdrop" role="dialog" aria-modal="true">
+                <div className="table-modal-card table-menu-modal">
+                  <div className="table-menu-modal-header">
+                    <div className="modal-title-lock">
+                      <span className="modal-crown">♛</span>
+                      <h3>Match Details &amp; Settings</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="table-modal-close-icon"
+                      onClick={() => setTableMenuOpen(false)}
+                      aria-label="Close menu"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div className="table-menu-modal-body">
+                    {/* Player Info Card */}
+                    <div className="menu-detail-card">
+                      <div className="menu-detail-header">
+                        <span className="detail-tag">ACTIVE PLAYER</span>
+                        <span className="room-sub-tag">ROOM: {roomCode?.toUpperCase() || "PRACTICE"}</span>
+                      </div>
+                      <div className="menu-player-row">
+                        <div className={`menu-player-dot ${you.team.toLowerCase()}`} />
+                        <strong className="menu-player-name">{nickname || you.name}</strong>
+                        <span className={`viewer-team-tag ${you.team.toLowerCase()}`}>{you.team} TEAM</span>
+                        {(localMatchRef.current || roomCode === "practice") && (
+                          <span className={`viewer-diff-tag ${botDifficulty}`} title={`Bot Difficulty: ${botDifficulty.toUpperCase()}`}>
+                            {botDifficulty === "easy" ? "🟢 EASY" : botDifficulty === "normal" ? "🟡 NORMAL" : "🔴 HARD"}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Secret Cue Card */}
+                    <div className="menu-detail-card">
+                      <span className="detail-tag">SECRET PARTNER CUE</span>
+                      <div className="menu-cue-row">
+                        <span className="menu-cue-symbol">{selectedSignalMeta.symbol}</span>
+                        <div className="menu-cue-info">
+                          <strong>{selectedSignalMeta.label}</strong>
+                          <small>{selectedSignalMeta.description}</small>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Music & Audio Controls Card */}
+                    <div className="menu-detail-card music-audio-card">
+                      <span className="detail-tag">MUSIC &amp; AUDIO CONTROLS</span>
+                      <div className="menu-music-wrap">
+                        <MiniMusicPlayer />
+                      </div>
+                    </div>
+
+                    {/* Match Standings */}
+                    <div className="menu-detail-card">
+                      <span className="detail-tag">MATCH RACE STANDINGS (7 LETTERS TO WIN)</span>
+                      <div className="menu-race-teams">
+                        {(["Alpha", "Bravo"] as const).map((team) => {
+                          const count = scores[team] || 0;
+                          const isYourTeam = you.team === team;
+                          return (
+                            <div key={team} className={`menu-race-team-row ${team.toLowerCase()} ${isYourTeam ? "is-your-team" : ""}`}>
+                              <div className="menu-race-meta">
+                                <span className={`team-dot ${team.toLowerCase()}`} />
+                                <span className="team-title">TEAM {team.toUpperCase()}{isYourTeam ? " (YOU)" : ""}</span>
+                                <strong className="team-score-num">{count}/7</strong>
+                              </div>
+                              <div className="menu-letters-track">
+                                {JACKPOT_LETTERS.map((letter, idx) => (
+                                  <span
+                                    key={`menu-race-${team}-${letter}-${idx}`}
+                                    className={`menu-letter-pill ${count > idx ? "earned" : "empty"}`}
+                                  >
+                                    {letter}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Rules Quick Recap */}
+                    <div className="menu-detail-card rules-card">
+                      <span className="detail-tag">HOW TO PLAY RECAP</span>
+                      <ul className="menu-rules-bullets">
+                        <li>Pass 1 card clockwise when it is your turn.</li>
+                        <li>Collect 4 cards of the same suit to get 4 of a kind.</li>
+                        <li>Flash your secret cue to your partner without opponents noticing!</li>
+                        <li>Teammate calls JACKPOT to score a letter toward J-A-C-K-P-O-T.</li>
+                        <li>If you spot an opponent signaling, tap SUSPECT to intercept and steal the point!</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="table-menu-modal-footer">
+                    <button
+                      type="button"
+                      className="table-modal-btn exit-danger-btn"
+                      onClick={() => {
+                        setTableMenuOpen(false);
+                        setExitConfirmOpen(true);
+                      }}
+                    >
+                      <span>🚪 Leave Match</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="table-modal-btn cancel-btn"
+                      onClick={() => setTableMenuOpen(false)}
+                    >
+                      Return to Table
                     </button>
                   </div>
                 </div>
@@ -4051,77 +4755,85 @@ export function JackpotApp() {
           </section>
         )}
 
-        {screen === "result" && result && (
-          <section className="result-screen">
-            <header className="jackpot-nav">
-              <div
-                className="jackpot-wordmark"
-                onClick={handleExitHome}
-                role="button"
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="wordmark-crown">♛</span>
-                <strong>JACKPOT</strong>
-                <small>ROUND {round} RESOLUTION</small>
-              </div>
-              <div className="jackpot-nav-tools">
-                <MiniMusicPlayer />
-                <button
-                  type="button"
-                  className="ghost-btn jackpot-back-btn"
-                  onClick={handleExitHome}
-                  aria-label="Exit Home"
-                >
-                  <span className="back-btn-text">← Exit Home</span>
-                  <span className="back-btn-mobile-text">← Exit</span>
-                </button>
-              </div>
-            </header>
-
-            <div className="result-container-wrap">
+        {screen === "result" && (
+          result ? (
+            <section className="result-screen" aria-label="Match Results">
               {result.valid ? (
                 <div className="confetti-burst" aria-hidden="true">
-                  {Array.from({ length: 48 }, (_, index) => (
+                  {Array.from({ length: 36 }, (_, index) => (
                     <i
                       key={index}
                       style={{
-                        left: `${(index * 23) % 100}%`,
-                        animationDelay: `${(index % 12) * 0.06}s`,
-                        backgroundColor: ["#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#fef08a", "#a855f7"][index % 6],
+                        left: `${(index * 27) % 100}%`,
+                        animationDelay: `${(index % 10) * 0.08}s`,
+                        backgroundColor: ["#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#fef08a"][index % 5],
                       }}
                     />
                   ))}
                 </div>
               ) : null}
 
-              <div className={`result-card-luxury ${result.valid ? "outcome-win" : "outcome-miss"}`}>
-                <div className="result-card-glow-edge" />
+              {/* Minimal Topbar: No clutter, fast exit & share */}
+              <header className="result-minimal-topbar">
+                <button
+                  type="button"
+                  className="result-topbar-btn"
+                  onClick={handleExitHome}
+                  title="Exit to Main Menu"
+                >
+                  <ResultExitIcon />
+                  <span>Exit</span>
+                </button>
 
-                {/* Outcome Header Pill & Hero Icon */}
-                <div className="result-header-row">
+                <div className="result-topbar-center">
+                  <span className="result-topbar-badge">
+                    <span className="result-badge-dot" />
+                    ROUND {round} RESOLVED
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  className="result-topbar-btn"
+                  onClick={handleShareResult}
+                  title="Share Results"
+                >
+                  <ResultShareIcon />
+                  <span className="desktop-only-inline">Share</span>
+                </button>
+              </header>
+
+              {/* Main Balanced Board: Zero Scroll on Desktop and Mobile */}
+              <div className="result-screen-inner">
+                {/* Hero Outcome Section */}
+                <div className="result-hero-section">
                   <div className={`result-emblem-badge ${result.valid ? "emblem-gold" : "emblem-ruby"}`}>
-                    <span className="result-emblem-icon">{result.valid ? "🏆" : "🚨"}</span>
+                    {result.valid ? <ResultTrophyIcon /> : <ResultAlertIcon />}
                   </div>
+
                   <div className="result-tag-cluster">
                     <span className={`result-status-pill ${result.valid ? "status-win" : "status-miss"}`}>
-                      {result.valid ? "✦ JACKPOT SCORED ✦" : "⚠ FALSE CALL / BLUFF BUSTED"}
+                      <ResultSparkleIcon />
+                      <span>{result.valid ? "JACKPOT SCORED" : "FALSE CALL / BLUFF BUSTED"}</span>
                     </span>
-                    <span className="result-round-pill">ROUND {round} RESOLVED</span>
+                  </div>
+
+                  <div className="result-narrative">
+                    <h2 className="result-headline">{result.title}</h2>
+                    <p className="result-description">{result.detail}</p>
                   </div>
                 </div>
 
-                <div className="result-narrative">
-                  <h2 className="result-headline">{result.title}</h2>
-                  <p className="result-description">{result.detail}</p>
-                </div>
-
-                {/* Match Race Tracker: J-A-C-K-P-O-T Progress for each team */}
+                {/* Match Race Standings: 7 Letter Tracker */}
                 <div className="result-race-board">
                   <div className="result-race-header">
-                    <span className="race-header-title">🏁 MATCH RACE STANDINGS</span>
-                    <span className="race-header-subtitle">Spell J-A-C-K-P-O-T (7 Letters) to Win</span>
+                    <span className="race-header-title">
+                      <ResultFlagIcon />
+                      <span>MATCH RACE STANDINGS</span>
+                    </span>
+                    <span className="race-header-subtitle">Spell J-A-C-K-P-O-T to win</span>
                   </div>
+
                   <div className="result-race-tracks">
                     {scoreTeams.map((team) => {
                       const count = Math.min(7, Math.max(0, scores[team] ?? 0));
@@ -4129,7 +4841,11 @@ export function JackpotApp() {
                       return (
                         <div key={team} className={`result-team-track ${isLeader && count > 0 ? "leader-track" : ""}`}>
                           <div className="team-track-info">
-                            <span className="team-track-name">{team}</span>
+                            <span className="team-track-name">
+                              {team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
+                                ? offlineTeamName
+                                : team}
+                            </span>
                             <span className="team-track-score-badge">{count}/7</span>
                           </div>
                           <div className="team-track-letters" aria-label={`${team} has ${count} letters`}>
@@ -4152,7 +4868,7 @@ export function JackpotApp() {
                   </div>
                 </div>
 
-                {/* Action Buttons Panel */}
+                {/* Action Buttons: Always in Sight */}
                 <div className="result-action-panel">
                   {room?.gameAuthoritative && room.hostPlayerId !== session?.playerId ? (
                     <div className="result-waiting-host-box">
@@ -4172,13 +4888,13 @@ export function JackpotApp() {
                         }
                       }}
                     >
-                      <span className="btn-sparkle">✦</span>
+                      <ResultSparkleIcon />
                       <span>
                         {(matchWonTeam || scores.Alpha >= WINNING_SCORE || scores.Bravo >= WINNING_SCORE)
-                          ? "START NEW MATCH"
-                          : "START NEXT ROUND"}
+                          ? "RUN IT BACK (NEW MATCH)"
+                          : `START NEXT ROUND (ROUND ${round + 1})`}
                       </span>
-                      <span className="btn-arrow">➔</span>
+                      <ResultArrowRightIcon />
                     </button>
                   )}
 
@@ -4188,20 +4904,138 @@ export function JackpotApp() {
                       className="result-secondary-btn"
                       onClick={handleShareResult}
                     >
-                      <span>📋 Share Results</span>
+                      <ResultShareIcon />
+                      <span>Share Results</span>
                     </button>
                     <button
                       type="button"
                       className="result-exit-btn"
                       onClick={handleExitHome}
                     >
-                      <span>🚪 Exit to Main Menu</span>
+                      <ResultExitIcon />
+                      <span>Exit to Menu</span>
                     </button>
                   </div>
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
+          ) : (
+            <section className="result-screen result-fallback-screen" aria-label="Round Summary">
+              <header className="result-minimal-topbar">
+                <button
+                  type="button"
+                  className="result-topbar-btn"
+                  onClick={handleExitHome}
+                  title="Exit to Main Menu"
+                >
+                  <ResultExitIcon />
+                  <span>Exit</span>
+                </button>
+                <div className="result-topbar-center">
+                  <span className="result-topbar-badge">
+                    <span className="result-badge-dot" />
+                    MATCH STANDINGS
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="result-topbar-btn"
+                  onClick={handleShareResult}
+                  title="Share Results"
+                >
+                  <ResultShareIcon />
+                  <span className="desktop-only-inline">Share</span>
+                </button>
+              </header>
+
+              <div className="result-screen-inner">
+                <div className="result-hero-section">
+                  <div className="result-emblem-badge emblem-gold">
+                    <ResultTrophyIcon />
+                  </div>
+                  <div className="result-narrative">
+                    <h2 className="result-headline">Round Standings</h2>
+                    <p className="result-description">
+                      {roomCode === "practice" || localMatchRef.current
+                        ? "Ready to deal the next round with your AI partner!"
+                        : "Round concluded. Ready to continue match."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="result-race-board">
+                  <div className="result-race-header">
+                    <span className="race-header-title">
+                      <ResultFlagIcon />
+                      <span>MATCH RACE STANDINGS</span>
+                    </span>
+                    <span className="race-header-subtitle">Spell J-A-C-K-P-O-T to win</span>
+                  </div>
+                  <div className="result-race-tracks">
+                    {scoreTeams.map((team) => {
+                      const count = Math.min(7, Math.max(0, scores[team] ?? 0));
+                      const isLeader = count === Math.max(...scoreTeams.map((t) => scores[t] ?? 0));
+                      return (
+                        <div key={team} className={`result-team-track ${isLeader && count > 0 ? "leader-track" : ""}`}>
+                          <div className="team-track-info">
+                            <span className="team-track-name">
+                              {team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
+                                ? offlineTeamName
+                                : team}
+                            </span>
+                            <span className="team-track-score-badge">{count}/7</span>
+                          </div>
+                          <div className="team-track-letters" aria-label={`${team} has ${count} letters`}>
+                            {JACKPOT_LETTERS.map((letter, idx) => {
+                              const active = idx < count;
+                              return (
+                                <span
+                                  key={letter}
+                                  className={`result-letter-token ${active ? "active-letter" : "empty-letter"}`}
+                                  title={`${team} Letter ${letter} ${active ? "Earned" : "Remaining"}`}
+                                >
+                                  {letter}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="result-action-panel">
+                  <button
+                    type="button"
+                    className="result-primary-btn"
+                    onClick={() => {
+                      if (roomCode === "practice" || localMatchRef.current) {
+                        void handleNextRound();
+                      } else {
+                        navigate("table", roomCode || "practice");
+                      }
+                    }}
+                  >
+                    <ResultSparkleIcon />
+                    <span>{roomCode === "practice" || localMatchRef.current ? `START ROUND ${round + 1}` : "RETURN TO TABLE"}</span>
+                    <ResultArrowRightIcon />
+                  </button>
+                  <div className="result-secondary-row">
+                    <button
+                      type="button"
+                      className="result-exit-btn"
+                      onClick={handleExitHome}
+                      style={{ gridColumn: "span 2" }}
+                    >
+                      <ResultExitIcon />
+                      <span>Exit to Main Menu</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )
         )}
       </div>
       {tableToasts.length ? <div className="table-toast-region" role="region" aria-label="Game notifications" aria-live="polite">
@@ -4211,6 +5045,411 @@ export function JackpotApp() {
           <button type="button" aria-label="Dismiss notification" onClick={() => setTableToasts((current) => current.filter((entry) => entry.id !== toast.id))}>×</button>
         </div>)}
       </div> : null}
+
+            {/* Round Secret Signal Pick Modal (Choose new cue before next round) */}
+            {roundSignalPickOpen && (
+              <div className="table-modal-backdrop round-signal-backdrop" role="dialog" aria-modal="true">
+                <div className="table-modal-card round-signal-modal">
+                  <div className="table-menu-modal-header">
+                    <div className="modal-title-lock">
+                      <span className="modal-crown">🔄</span>
+                      <h3>Round {round + 1}: Switch Secret Signal</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="table-modal-close-icon"
+                      onClick={() => setRoundSignalPickOpen(false)}
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div className="round-signal-body">
+                    <div className="signal-compromised-banner">
+                      <span className="banner-icon">⚠️</span>
+                      <div className="banner-text">
+                        <strong>PREVIOUS SIGNAL EXPOSED</strong>
+                        <p>
+                          Your cue ({selectedSignalMeta.symbol} {selectedSignalMeta.label}) was spotted or resolved!
+                          Agree on a fresh secret signal with {partnerName} before dealing Round {round + 1}:
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="round-signals-grid">
+                      {signalLibrary.map((signal) => {
+                        const isSelected = selectedSignal === signal.id;
+                        return (
+                          <button
+                            key={signal.id}
+                            type="button"
+                            className={`round-signal-choice-card ${isSelected ? "selected" : ""}`}
+                            onClick={() => setSelectedSignal(signal.id)}
+                          >
+                            <span className="choice-icon">{signal.symbol}</span>
+                            <strong className="choice-label">{signal.label}</strong>
+                            <span className="choice-desc">{signal.description}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="round-signal-modal-footer">
+                      <button
+                        type="button"
+                        className="table-modal-btn confirm-jackpot-btn"
+                        onClick={() => {
+                          void handleNextRoundWithSignal(selectedSignal);
+                        }}
+                      >
+                        <span>Deal Round {round + 1} with {selectedSignalMeta.symbol} {selectedSignalMeta.label} ➔</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+      {/* 1. First Visit Username Modal */}
+      {firstVisitModalOpen && (
+        <div className="table-modal-backdrop first-visit-backdrop" role="dialog" aria-modal="true">
+          <div className="table-modal-card first-visit-card">
+            <div className="first-visit-badge">👋</div>
+            <h2>What should we call you?</h2>
+            <p className="first-visit-desc">
+              Choose your player nickname to enter Jackpot. You can start playing immediately as a Guest!
+            </p>
+            <form
+              className="first-visit-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleCompleteFirstVisit();
+              }}
+            >
+              <input
+                type="text"
+                className="first-visit-input"
+                placeholder="e.g. Ace, Lucky, Chioma..."
+                value={firstVisitName}
+                onChange={(e) => setFirstVisitName(e.target.value)}
+                maxLength={MAX_PLAYER_NAME_LENGTH}
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="game-primary-btn first-visit-submit-btn"
+                disabled={!firstVisitName.trim()}
+              >
+                Continue to Game ➔
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Interactive Tutorial Floating HUD Banner (Subway Surfers Style) */}
+      {isTutorialMatch && tutorialStep && (
+        <div className="tutorial-hud-overlay" role="region" aria-label="Interactive Game Tutorial">
+          <div className="tutorial-hud-banner">
+            <div className="tutorial-hud-top-bar">
+              <span className="tutorial-hud-badge">
+                <span className="hud-badge-pulse" />
+                {TUTORIAL_COACHMARKS[tutorialStep]?.badge ?? "TUTORIAL"}
+              </span>
+              <button
+                type="button"
+                className="tutorial-hud-skip-btn"
+                onClick={() => {
+                  setIsTutorialMatch(false);
+                  setTutorialStep(null);
+                  setTutorialCompleted(true);
+                  showTableToast("info", "Tutorial Skipped", "You can now play freely!");
+                }}
+              >
+                Skip Tutorial ✕
+              </button>
+            </div>
+
+            <div className="tutorial-hud-body">
+              <h3 className="tutorial-hud-title">
+                {TUTORIAL_COACHMARKS[tutorialStep]?.title}
+              </h3>
+              <p className="tutorial-hud-desc">
+                {TUTORIAL_COACHMARKS[tutorialStep]?.description}
+              </p>
+            </div>
+
+            <div className="tutorial-hud-actions">
+              <button
+                type="button"
+                className="tutorial-hud-next-btn"
+                onClick={handleTutorialNext}
+              >
+                <span>{TUTORIAL_COACHMARKS[tutorialStep]?.actionText || "Next ➔"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. End of Guest Session Summary Modal */}
+      {sessionSummaryOpen && (
+        <div className="table-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="table-modal-card session-summary-card">
+            <span className="modal-category-tag">SESSION COMPLETE</span>
+            <h3 className="session-summary-title">Your Match Record</h3>
+            <p className="session-summary-subtitle">Here is how you performed this session:</p>
+
+            <div className="session-stats-grid">
+              <div className="stat-badge-box">
+                <span className="stat-badge-val">{matchStats.roundsPlayed}</span>
+                <span className="stat-badge-lbl">Rounds</span>
+              </div>
+              <div className="stat-badge-box">
+                <span className="stat-badge-val">{matchStats.jackpotsCalled}</span>
+                <span className="stat-badge-lbl">Jackpots</span>
+              </div>
+              <div className="stat-badge-box">
+                <span className="stat-badge-val">{matchStats.suspectsCaught}</span>
+                <span className="stat-badge-lbl">Catches</span>
+              </div>
+              <div className="stat-badge-box">
+                <span className="stat-badge-val">{scores.Alpha}</span>
+                <span className="stat-badge-lbl">Wins</span>
+              </div>
+            </div>
+
+            <div className="session-account-pitch-box">
+              <strong className="pitch-heading">
+                <span>⭐</span> Save Your Jackpot Record
+              </strong>
+              <p className="pitch-desc">
+                Create a free account to preserve these stats in Neon DB, unlock 6 AI partner personalities, and customize your profile!
+              </p>
+            </div>
+
+            <div className="session-actions-stack">
+              <button
+                type="button"
+                className="game-primary-btn session-save-cta-btn"
+                onClick={() => {
+                  setAuthMode("register");
+                  setAuthUsername(nickname || "Player");
+                  setSessionSummaryOpen(false);
+                  setAuthModalOpen(true);
+                }}
+              >
+                <span>Create Free Account &amp; Save Stats ➔</span>
+              </button>
+              <button
+                type="button"
+                className="session-exit-ghost-btn"
+                onClick={() => {
+                  setSessionSummaryOpen(false);
+                  navigate("home");
+                }}
+              >
+                Discard &amp; Exit to Main Menu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Account Registration & Login Modal (Neon DB Synced) */}
+      {authModalOpen && (
+        <div className="table-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="table-modal-card account-modal-card">
+            <div className="account-modal-header">
+              <h3 className="account-modal-title">
+                {authMode === "register" ? "Create Free Account" : "Log In to Account"}
+              </h3>
+              <button
+                type="button"
+                className="table-modal-close-icon"
+                onClick={() => setAuthModalOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Mode Switch Tabs */}
+            <div className="account-modal-tabs">
+              <button
+                type="button"
+                className={`account-tab-btn ${authMode === "register" ? "active" : ""}`}
+                onClick={() => setAuthMode("register")}
+              >
+                Create Account
+              </button>
+              <button
+                type="button"
+                className={`account-tab-btn ${authMode === "login" ? "active" : ""}`}
+                onClick={() => setAuthMode("login")}
+              >
+                Log In
+              </button>
+            </div>
+
+            <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.75)", marginBottom: "16px" }}>
+              {authMode === "register"
+                ? "Your guest gameplay record will automatically migrate into your permanent Neon DB profile!"
+                : "Enter your username and PIN to load your permanent profile and stats from Neon DB."}
+            </p>
+
+            <form
+              className="account-form-stack"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (authMode === "register") {
+                  handleRegisterAccount();
+                } else {
+                  void handleLoginAccount();
+                }
+              }}
+            >
+              <div className="account-input-wrap">
+                <label>Player Username</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Ace, Lucky, Chioma..."
+                  value={authUsername}
+                  onChange={(e) => setAuthUsername(e.target.value)}
+                  maxLength={MAX_PLAYER_NAME_LENGTH}
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="account-input-wrap">
+                <label>Password or PIN (Quick access)</label>
+                <input
+                  type="password"
+                  placeholder="Enter a password or 4-digit PIN"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                />
+              </div>
+
+              {authMode === "register" && (
+                <div className="account-input-wrap">
+                  <label>Email (Optional for recovery)</label>
+                  <input
+                    type="email"
+                    placeholder="yourname@example.com (optional)"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                  />
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="game-primary-btn"
+                style={{ width: "100%", marginTop: "8px", padding: "13px" }}
+                disabled={!authUsername.trim()}
+              >
+                {authMode === "register" ? "Save My Stats & Create Account ➔" : "Log In & Sync Profile ➔"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Profile Setup Modal (Post-Registration Customization) */}
+      {profileSetupOpen && (
+        <div className="table-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="table-modal-card account-modal-card" style={{ maxWidth: "540px" }}>
+            <div className="account-modal-header">
+              <h3 className="account-modal-title">Profile Customization</h3>
+              <button
+                type="button"
+                className="table-modal-close-icon"
+                onClick={() => setProfileSetupOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.75)", marginBottom: "12px" }}>
+              Welcome to verified play! Choose your avatar, player title, and permanent AI partner:
+            </p>
+
+            {/* Avatar Picker */}
+            <div className="profile-setup-section-title">Select Avatar Badge</div>
+            <div className="avatar-grid-picker">
+              {AVAILABLE_AVATARS.map((av) => (
+                <button
+                  key={av.id}
+                  type="button"
+                  className={`avatar-choice-card ${selectedAvatar === av.emoji ? "selected" : ""}`}
+                  onClick={() => setSelectedAvatar(av.emoji)}
+                >
+                  <span className="avatar-emoji-glyph">{av.emoji}</span>
+                  <span className="avatar-choice-lbl">{av.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Title Picker */}
+            <div className="profile-setup-section-title">Select Player Title</div>
+            <div className="title-chips-wrap">
+              {AVAILABLE_TITLES.map((tit) => (
+                <button
+                  key={tit}
+                  type="button"
+                  className={`title-chip-btn ${selectedTitle === tit ? "selected" : ""}`}
+                  onClick={() => setSelectedTitle(tit)}
+                >
+                  {tit}
+                </button>
+              ))}
+            </div>
+
+            {/* Partner Selection */}
+            <div className="profile-setup-section-title">Unlocked AI Partner</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px", marginBottom: "14px" }}>
+              {ALL_ARCHETYPE_IDS.map((aid) => {
+                const b = BOT_ARCHETYPES[aid];
+                const isSel = selectedPartnerId === aid;
+                return (
+                  <button
+                    key={aid}
+                    type="button"
+                    className={`avatar-choice-card ${isSel ? "selected" : ""}`}
+                    onClick={() => setSelectedPartnerId(aid)}
+                  >
+                    <span className="avatar-emoji-glyph">{b.avatar}</span>
+                    <span className="avatar-choice-lbl" style={{ fontWeight: 800 }}>{b.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="profile-setup-footer">
+              <button
+                type="button"
+                className="game-ghost-btn"
+                onClick={() => {
+                  setProfileSetupOpen(false);
+                  navigate("home");
+                }}
+              >
+                Skip for Now
+              </button>
+              <button
+                type="button"
+                className="game-primary-btn"
+                onClick={handleSaveProfile}
+              >
+                Save Profile &amp; Play ➔
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -4221,6 +5460,7 @@ function TableSeat({
   playerCount,
   isActive,
   isYou,
+  isTeammate,
   peek,
   selectedCardId,
   canSelect,
@@ -4228,6 +5468,9 @@ function TableSeat({
   reaction,
   hasFourOfAKind,
   activeSignal,
+  isTutorialPickCard,
+  onSuspectTarget,
+  canSuspect,
 }: {
   player: PlayerSlot;
   visualIndex: number;
@@ -4242,10 +5485,14 @@ function TableSeat({
   reaction?: ReactionEvent;
   hasFourOfAKind?: boolean;
   activeSignal?: { symbol: string; label: string; id: string } | null;
+  isTutorialPickCard?: boolean;
+  onSuspectTarget?: (targetPlayerId: string) => void;
+  canSuspect?: boolean;
 }) {
   const seatClass = SEAT_CLASS_BY_COUNT[playerCount]?.[visualIndex] ?? SEAT_CLASS_BY_COUNT[8][visualIndex];
   const count = player.hand.length;
   const showFaces = isYou || peek;
+  const isOpponent = !isYou && !isTeammate;
 
   return (
     <div
@@ -4255,6 +5502,7 @@ function TableSeat({
         isActive ? "is-active" : "",
         player.isStarter ? "is-starter" : "",
         isYou ? "is-you" : "",
+        isOpponent ? "is-opponent-targetable" : "",
         activeSignal ? "seat-is-signaling" : "",
       ]
         .filter(Boolean)
@@ -4270,8 +5518,12 @@ function TableSeat({
       )}
 
       {/* Reaction Speech Bubble */}
-      {reaction && !activeSignal && (
-        <div key={reaction.id} className="reaction-burst-bubble" aria-label={`${reaction.playerName} reacted`}>
+      {reaction && (
+        <div
+          key={reaction.id}
+          className={`reaction-burst-bubble ${activeSignal ? "reaction-elevated" : ""}`}
+          aria-label={`${reaction.playerName} reacted`}
+        >
           <span className="reaction-burst-symbol">
             {quickReactions.find((item) => item.id === reaction.reactionId)?.symbol ?? "✨"}
           </span>
@@ -4280,7 +5532,22 @@ function TableSeat({
       )}
 
       {/* Player Plaque (Avatar, Name, Team, Status) - Always above cards */}
-      <div className={`player-plaque ${isYou ? "you" : ""} ${isActive ? "active-passer" : ""}`}>
+      <div
+        className={[
+          "player-plaque",
+          isYou ? "you" : "",
+          isActive ? "active-passer" : "",
+          isOpponent && canSuspect ? "opponent-suspect-clickable" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        onClick={() => {
+          if (isOpponent && canSuspect && onSuspectTarget) {
+            onSuspectTarget(player.id);
+          }
+        }}
+        title={isOpponent && canSuspect ? `Tap to SUSPECT ${player.name}!` : undefined}
+      >
         <div className={`player-avatar-badge ${player.team.toLowerCase()}`}>
           <span>{player.name.slice(0, 1).toUpperCase()}</span>
           <span className={`player-team-indicator ${player.team.toLowerCase()}`} title={`Team ${player.team}`} />
@@ -4298,6 +5565,8 @@ function TableSeat({
             </span>
           ) : isYou ? (
             <span className="player-team-label-sub">{player.team} Team</span>
+          ) : isOpponent && canSuspect ? (
+            <span className="player-suspect-cue-tag">🎯 TAP TO SUSPECT</span>
           ) : null}
         </div>
         <span className="hand-count-badge" title={`${count} cards in hand`}>{count}</span>
@@ -4315,19 +5584,27 @@ function TableSeat({
           ).map((card) => {
             const playerFourSuit = findFourOfAKind(player.hand);
             const isMatch = isYou && Boolean(playerFourSuit) && card.suit === playerFourSuit;
+            const isTutorialTarget = Boolean(isYou && isTutorialPickCard && (card.suit === "triangle" || card.id === "tut1-h-triangle-4"));
             return (
-              <WhotCard
-                key={card.id}
-                card={card}
-                selected={isYou && selectedCardId === card.id}
-                className={isMatch ? "is-four-matching" : ""}
-                onClick={
-                  isYou && canSelect
-                    ? () => onSelectCard(card.id)
-                    : undefined
-                }
-                compact={!isYou}
-              />
+              <div key={card.id} style={{ position: "relative" }}>
+                {isTutorialTarget && (
+                  <div className="tutorial-card-pointer" aria-hidden="true">
+                    <span className="pointer-finger">👆</span>
+                    <span className="pointer-label">PICK THIS</span>
+                  </div>
+                )}
+                <WhotCard
+                  card={card}
+                  selected={isYou && selectedCardId === card.id}
+                  className={`${isMatch ? "is-four-matching" : ""} ${isTutorialTarget ? "tutorial-spotlight-card" : ""}`}
+                  onClick={
+                    isYou && canSelect
+                      ? () => onSelectCard(card.id)
+                      : undefined
+                  }
+                  compact={!isYou}
+                />
+              </div>
             );
           })}
         </div>
@@ -4337,5 +5614,76 @@ function TableSeat({
         </div>
       )}
     </div>
+  );
+}
+
+function ResultTrophyIcon() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" />
+      <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" />
+      <path d="M4 22h16" />
+      <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" />
+      <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" />
+      <path d="M18 2H6v7a6 6 0 0 0 12 0V2z" />
+    </svg>
+  );
+}
+
+function ResultAlertIcon() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  );
+}
+
+function ResultFlagIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+      <line x1="4" y1="22" x2="4" y2="15" />
+    </svg>
+  );
+}
+
+function ResultSparkleIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" />
+    </svg>
+  );
+}
+
+function ResultArrowRightIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="12 5 19 12 12 19" />
+    </svg>
+  );
+}
+
+function ResultShareIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+    </svg>
+  );
+}
+
+function ResultExitIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
   );
 }

@@ -154,6 +154,7 @@ export function teamHasFourOfAKind(
 ): { player: PlayerSlot; suit: Suit } | null {
   for (const player of players) {
     if (player.team !== team) continue;
+    if (player.hand.length !== 4) continue;
     const suit = findFourOfAKind(player.hand);
     if (suit) return { player, suit };
   }
@@ -165,6 +166,7 @@ export function findAnyFourOfAKind(
   players: PlayerSlot[],
 ): { player: PlayerSlot; suit: Suit } | null {
   for (const player of players) {
+    if (player.hand.length !== 4) continue;
     const suit = findFourOfAKind(player.hand);
     if (suit) return { player, suit };
   }
@@ -330,6 +332,23 @@ export function resolveJackpot(
   const opposingTeams = Array.from(new Set(state.players.map((p) => p.team).filter((t) => t !== caller.team)));
   const penaltyScoringTeam = opposingTeams.length > 0 ? opposingTeams[0] : null;
 
+  // Check if someone had four of a kind but holding 5th card:
+  const holderWithFive = state.players.find(
+    (p) => p.team === caller.team && p.hand.length > 4 && findFourOfAKind(p.hand)
+  );
+  if (holderWithFive) {
+    return {
+      kind: "jackpot",
+      valid: false,
+      callingTeam: caller.team,
+      callingPlayerId,
+      scoringTeam: penaltyScoringTeam,
+      suit: null,
+      title: "Premature JACKPOT!",
+      detail: `${caller.name} called JACKPOT while ${holderWithFive.name} was still holding a 5th card — must pass the extra card first!${penaltyScoringTeam ? ` +1 Point to Team ${penaltyScoringTeam}!` : ""}`,
+    };
+  }
+
   return {
     kind: "jackpot",
     valid: false,
@@ -343,19 +362,68 @@ export function resolveJackpot(
 }
 
 /**
- * SUSPECT: you believe someone is sitting on a four-of-a-kind.
- * Valid if any opposing team currently has four-of-a-kind → you score.
- * If only your own team has it, suspect fails (you exposed your side).
- * If nobody has it, suspect fails.
+ * SUSPECT: you believe an opponent is sitting on a four-of-a-kind.
+ * When targetPlayerId is provided (Option A: targeted suspect):
+ *   - Checks specifically whether that targeted opponent holds four-of-a-kind.
+ *   - If they do: you catch them! +1 point to caller's team.
+ *   - If they do not: false alarm! (Even if their partner secretly had four, the decoy worked).
+ * When targetPlayerId is omitted (fallback): checks if any opponent holds four-of-a-kind.
  */
 export function resolveSuspect(
   state: GameSnapshot,
   callingPlayerId: string,
+  targetPlayerId?: string,
 ): RoundResult {
   const caller = state.players.find((player) => player.id === callingPlayerId);
   if (!caller) throw new Error("Caller not found.");
 
-  const hit = state.players.find((player) => player.team !== caller.team && findFourOfAKind(player.hand));
+  const target = targetPlayerId
+    ? state.players.find((player) => player.id === targetPlayerId)
+    : undefined;
+
+  // If a specific target was called:
+  if (target) {
+    if (target.team === caller.team) {
+      return {
+        kind: "suspect",
+        valid: false,
+        callingTeam: caller.team,
+        callingPlayerId,
+        scoringTeam: null,
+        suit: null,
+        title: "Friendly Fire!",
+        detail: `${caller.name} suspected teammate ${target.name}! You cannot suspect your own team.`,
+      };
+    }
+
+    const targetSuit = target.hand.length === 4 ? findFourOfAKind(target.hand) : null;
+    if (targetSuit) {
+      return {
+        kind: "suspect",
+        valid: true,
+        callingTeam: caller.team,
+        callingPlayerId,
+        scoringTeam: caller.team,
+        suit: targetSuit,
+        title: "SUSPECT LANDS!",
+        detail: `${caller.name} caught ${target.name} (${target.team}) with four ${targetSuit}s! +1 ${caller.team}.`,
+      };
+    }
+
+    return {
+      kind: "suspect",
+      valid: false,
+      callingTeam: caller.team,
+      callingPlayerId,
+      scoringTeam: null,
+      suit: null,
+      title: "False Suspect!",
+      detail: `${caller.name} suspected ${target.name}, but ${target.name} did not have four-of-a-kind. False call!`,
+    };
+  }
+
+  // Fallback (untargeted) check:
+  const hit = state.players.find((player) => player.team !== caller.team && player.hand.length === 4 && findFourOfAKind(player.hand));
   const opposingSuit = hit ? findFourOfAKind(hit.hand) : null;
 
   if (hit && opposingSuit) {

@@ -38,9 +38,9 @@ export type DealResult = {
 export const DEFAULT_PLAYER_NAMES = ["You", "Tobi", "Kemi", "Sola", "Chidi", "Amaka", "Bayo", "Ngozi"] as const;
 
 /** Create a balanced deck for a supported table size (four seats retained for existing rooms). */
-export function createDeck(numPlayers = PLAYER_COUNT): JackpotCard[] {
+export function createDeck(numPlayers = PLAYER_COUNT, randomIntFn?: (max: number) => number): JackpotCard[] {
   assertTableSize(numPlayers);
-  const suits = shuffleValues([...SUITS]).slice(0, numPlayers);
+  const suits = shuffleValues([...SUITS], randomIntFn).slice(0, numPlayers);
   return suits.flatMap((suit) =>
     Array.from({ length: CARDS_PER_SUIT }, (_, index) => ({
       id: `${suit}-${index + 1}`,
@@ -51,8 +51,8 @@ export function createDeck(numPlayers = PLAYER_COUNT): JackpotCard[] {
 }
 
 /** In-place Fisher–Yates on a copy, using unbiased cryptographic integers where available. */
-export function shuffleDeck(deck: JackpotCard[]): JackpotCard[] {
-  return shuffleValues(deck);
+export function shuffleDeck(deck: JackpotCard[], randomIntFn?: (max: number) => number): JackpotCard[] {
+  return shuffleValues(deck, randomIntFn);
 }
 
 /** Validate the exact deck size and four-copy balance before any deal. */
@@ -94,7 +94,11 @@ export function createPlayerSlots(names: readonly string[] = DEFAULT_PLAYER_NAME
  * Deal the whole deck and reject any shuffle that gives one player an instant
  * four-of-a-kind. Each accepted deal is uniformly shuffled subject to that rule.
  */
-export function dealForPlayerSlots(deck: JackpotCard[], playerSlots: PlayerSlot[]): DealResult {
+export function dealForPlayerSlots(
+  deck: JackpotCard[],
+  playerSlots: PlayerSlot[],
+  randomIntFn?: (max: number) => number,
+): DealResult {
   const numPlayers = playerSlots.length;
   assertTableSize(numPlayers);
   verifyDeckIntegrity(deck, numPlayers);
@@ -104,7 +108,7 @@ export function dealForPlayerSlots(deck: JackpotCard[], playerSlots: PlayerSlot[
 
   let dealtPlayers: PlayerSlot[];
   for (;;) {
-    const shuffled = shuffleDeck(deck);
+    const shuffled = shuffleDeck(deck, randomIntFn);
     const candidate = playerSlots.map((slot) => ({ ...slot, hand: [] as JackpotCard[], isStarter: false }));
     // Round-robin gives exactly four cards to each seat and consumes the deck.
     shuffled.forEach((card, index) => candidate[index % numPlayers].hand.push(card));
@@ -156,9 +160,12 @@ export function dealInitialHands(deck: JackpotCard[], slots: PlayerSlot[] = crea
   return dealForPlayerSlots(deck, slots);
 }
 
-export function setupJackpotRound(names: readonly string[] = DEFAULT_PLAYER_NAMES): DealResult {
+export function setupJackpotRound(
+  names: readonly string[] = DEFAULT_PLAYER_NAMES,
+  randomIntFn?: (max: number) => number,
+): DealResult {
   const slots = createPlayerSlots(names);
-  return dealForPlayerSlots(createDeck(slots.length), slots);
+  return dealForPlayerSlots(createDeck(slots.length, randomIntFn), slots, randomIntFn);
 }
 
 function assertTableSize(numPlayers: number): asserts numPlayers is 4 | 6 | 8 {
@@ -167,10 +174,11 @@ function assertTableSize(numPlayers: number): asserts numPlayers is 4 | 6 | 8 {
   }
 }
 
-function shuffleValues<T>(values: readonly T[]): T[] {
+function shuffleValues<T>(values: readonly T[], randomIntFn?: (max: number) => number): T[] {
+  const nextRandom = randomIntFn ?? randomInt;
   const shuffled = [...values];
   for (let i = shuffled.length - 1; i > 0; i -= 1) {
-    const j = randomInt(i + 1);
+    const j = nextRandom(i + 1);
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
   return shuffled;

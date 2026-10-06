@@ -1,11 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Lilita_One } from "next/font/google";
+import { Plus_Jakarta_Sans, Lilita_One } from "next/font/google";
 import { MusicProvider } from "@/components/MusicProvider";
+import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import "./globals.css";
 
-const geistSans = Geist({
+const fontSans = Plus_Jakarta_Sans({
   variable: "--font-sans",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  display: "swap",
 });
 
 const lilitaOne = Lilita_One({
@@ -149,7 +152,7 @@ const jsonLd = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${lilitaOne.variable} h-full antialiased`}>
+    <html lang="en" className={`${fontSans.variable} ${lilitaOne.variable} h-full antialiased`}>
       <head>
         <script
           type="application/ld+json"
@@ -157,6 +160,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
       </head>
       <body className="min-h-full flex flex-col bg-[#120904] text-white">
+        <ServiceWorkerRegistration />
         <MusicProvider>{children}</MusicProvider>
       </body>
     </html>

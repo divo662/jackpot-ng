@@ -920,7 +920,11 @@ async function finishStrategy(room: SharedRoom): Promise<SharedRoom> {
   return (await readRoom(room.code, true)) ?? room;
 }
 
-export type SharedGameAction = { type: "pass"; playerId: string; cardId: string } | { type: "reaction"; playerId: string; reactionId: string } | { type: "jackpot" | "suspect" | "signal" | "fake-signal"; playerId: string };
+export type SharedGameAction =
+  | { type: "pass"; playerId: string; cardId: string }
+  | { type: "reaction"; playerId: string; reactionId: string }
+  | { type: "jackpot" | "signal" | "fake-signal"; playerId: string }
+  | { type: "suspect"; playerId: string; targetPlayerId?: string };
 
 export async function performSharedGameAction(code: string, action: SharedGameAction): Promise<{ room?: SharedRoom; error?: string; notice?: string; suspectAttemptsRemaining?: SharedRoom["suspectAttemptsRemaining"] }> {
   const MAX_RETRIES = 4;
@@ -948,7 +952,7 @@ export async function performSharedGameAction(code: string, action: SharedGameAc
         if (!caller) return { error: "Your player session is not in this game." };
         if (caller.team !== "Alpha" && caller.team !== "Bravo") return { error: "SUSPECT is not configured for this team." };
         if ((suspectAttemptsRemaining[caller.team] ?? 0) <= 0) return { error: "Your team has used all three SUSPECT calls this round." };
-        result = resolveSuspect(game, action.playerId);
+        result = resolveSuspect(game, action.playerId, action.targetPlayerId);
         suspectAttemptsRemaining[caller.team] = (suspectAttemptsRemaining[caller.team] ?? 0) - 1;
         const signalTruth = room.pendingSignalTruth;
         const authenticity = signalTruth ? (signalTruth.isFake ? "The flashed signal was fake." : "The flashed signal was genuine.") : "";
