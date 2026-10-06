@@ -818,7 +818,10 @@ export function JackpotApp() {
   }, [hydrated, roomCode, screen, pathname, session?.playerId, applySharedRoom]);
 
   useEffect(() => {
-    if (hydrated) writePreferences(preferences);
+    if (!hydrated) return;
+    // Music volume / on-off are owned by MusicProvider; never overwrite them with this copy.
+    const stored = readPreferences();
+    writePreferences({ ...preferences, soundVolume: stored.soundVolume, soundEnabled: stored.soundEnabled });
   }, [hydrated, preferences]);
 
   useEffect(() => {

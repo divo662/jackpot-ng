@@ -53,7 +53,7 @@ export default function PrivacyPage() {
       <H2>Cookies and storage</H2>
       <p>
         We use browser local storage and a service worker (for the installable app experience and offline page). We do
-        not use tracking cookies.
+        not use tracking or advertising cookies. The cookie notice on first launch records your choice on your device only.
       </p>
 
       <H2>Children</H2>

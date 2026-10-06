@@ -148,6 +148,30 @@
       "created_at": "2026-10-06T18:18:08.700Z",
       "sender": "ios",
       "is_cancelled": false
+    },
+    {
+      "id": "7180c786-91bc-4dac-a80f-422808ff107a",
+      "role": "agent",
+      "content": "I added a Privacy Policy page and a Terms of Service page, linked from the settings page. I haven't built or run them, because the dependencies aren't installed here.\n\n- **Pages:** `/privacy` ([page.tsx](https://github.com/divo662/jackpot-ng/blob/main/src/app/privacy/page.tsx)) and `/terms` ([page.tsx](https://github.com/divo662/jackpot-ng/blob/main/src/app/terms/page.tsx)).\n- **Shared layout:** [LegalPage.tsx](https://github.com/divo662/jackpot-ng/blob/main/src/components/LegalPage.tsx) holds the shared layout, a back link to Settings, and the contact section.\n- **Settings link:** [SettingsPageContent.tsx](https://github.com/divo662/jackpot-ng/blob/main/src/components/SettingsPageContent.tsx) now shows a Privacy Policy link, a Terms of Service link, and a \"Contact: DM @divo_dev on X\" link above the bottom buttons. The contact link opens `https://x.com/divo_dev` in a new tab.\n- **Sitemap:** both pages are in the sitemap.\n\n**What the pages say:** they're based on what the game does.\n- **Data:** nickname, optional account (with email and password only if provided), room and chat data, and local-storage settings.\n- **Service:** a free game with no real money, no tracking cookies and no ads.\n- **Bots:** they never see hidden cards.\n- **Rules:** the terms cover fair play, nickname and chat conduct, and a note that Hard difficulty is meant to be tough.\n\nI wrote these from the code, so please check them before launch:\n- **Legal review:** I'm not a lawyer. Have someone review the pages if you plan a wider release.\n- **Facts:** confirm the statements about data retention, ads and the under-13 policy match what you intend.\n- **Last-updated date:** it's set to October 6, 2026. Update it whenever you edit the pages.",
+      "status": "completed",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": "164374ce-7c34-4c2b-a3a6-83d727ae504d",
+      "created_at": "2026-10-06T18:18:49.637Z",
+      "sender": "macOS",
+      "is_cancelled": false
+    },
+    {
+      "id": "d46b0b1f-c159-4225-b30c-6f908e6c5bf2",
+      "role": "user",
+      "content": "I noticed at first launch I don’t see that pop up to promos here’s to acfepf cookies please do that also in the settings page music volume doesn’t actually work either make it work or remove it",
+      "status": "pending",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-06T18:22:07.093Z",
+      "sender": "ios",
+      "is_cancelled": false
     }
   ]
 }

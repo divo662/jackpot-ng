@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, Lilita_One } from "next/font/google";
 import { MusicProvider } from "@/components/MusicProvider";
+import { CookieConsent } from "@/components/CookieConsent";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import "./globals.css";
 
@@ -162,6 +163,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className="min-h-full flex flex-col bg-[#120904] text-white">
         <ServiceWorkerRegistration />
         <MusicProvider>{children}</MusicProvider>
+        <CookieConsent />
       </body>
     </html>
   );

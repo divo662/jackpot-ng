@@ -39,7 +39,7 @@ export function readPreferences(): GamePreferences {
       soundEnabled: typeof value.soundEnabled === "boolean" ? value.soundEnabled : DEFAULT_PREFERENCES.soundEnabled,
       // SFX is always active unless explicitly muted via the SFX toggle button
       soundEffects: !muted,
-      soundVolume: typeof value.soundVolume === "number" && value.soundVolume > 0.05 ? value.soundVolume : DEFAULT_PREFERENCES.soundVolume,
+      soundVolume: typeof value.soundVolume === "number" && value.soundVolume >= 0 && value.soundVolume <= 1 ? value.soundVolume : DEFAULT_PREFERENCES.soundVolume,
       animationsEnabled: typeof value.animationsEnabled === "boolean" ? value.animationsEnabled : DEFAULT_PREFERENCES.animationsEnabled,
     };
   } catch {

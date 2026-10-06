@@ -72,6 +72,9 @@ export function useMusic() {
 export function MusicProvider({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const unlocked = useRef(false);
+  // Web Audio gain node: HTMLMediaElement.volume is ignored on iOS/iPadOS, so route through a GainNode.
+  const gainRef = useRef<GainNode | null>(null);
+  const volumeRef = useRef(0);
   const [soundOn, setSoundOn] = useState(() => {
     const prefs = readPreferences();
     return prefs.soundEnabled;
@@ -82,12 +85,33 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  // Sync volume to audio element
+  // Sync volume to audio element (and gain node once Web Audio is set up)
   useEffect(() => {
+    volumeRef.current = volume;
+    const level = Math.min(1, Math.max(0, volume * 0.7));
+    if (gainRef.current) gainRef.current.gain.value = level;
     const audio = audioRef.current;
-    if (!audio) return;
-    audio.volume = Math.min(1, Math.max(0, volume * 0.7));
+    if (audio) audio.volume = gainRef.current ? 1 : level;
   }, [volume]);
+
+  const ensureGain = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || gainRef.current) return;
+    try {
+      const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const source = ctx.createMediaElementSource(audio);
+      const gain = ctx.createGain();
+      gain.gain.value = Math.min(1, Math.max(0, volumeRef.current * 0.7));
+      source.connect(gain).connect(ctx.destination);
+      audio.volume = 1;
+      gainRef.current = gain;
+      void ctx.resume().catch(() => {});
+    } catch {
+      /* fall back to element.volume */
+    }
+  }, []);
 
   // Handle play/pause state
   useEffect(() => {
@@ -106,6 +130,7 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const unlockAudio = () => {
       unlocked.current = true;
+      ensureGain();
       const audio = audioRef.current;
       if (audio && soundOn) {
         void audio.play().catch(() => {});
@@ -121,7 +146,7 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("keydown", unlockAudio);
       window.removeEventListener("touchstart", unlockAudio);
     };
-  }, [soundOn]);
+  }, [soundOn, ensureGain]);
 
   // Pre-buffer the upcoming track in the playlist for gapless transitions
   useEffect(() => {
@@ -144,6 +169,7 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
       if (audio) {
         if (next) {
           unlocked.current = true;
+          ensureGain();
           void audio.play().catch(() => {});
         } else {
           audio.pause();
@@ -151,7 +177,7 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
-  }, []);
+  }, [ensureGain]);
 
   const setVolume = useCallback((newVol: number) => {
     const clamped = Math.min(1, Math.max(0, newVol));
