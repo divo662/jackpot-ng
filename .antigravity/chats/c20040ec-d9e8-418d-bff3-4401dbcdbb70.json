@@ -3,6 +3,43 @@
   "name": "Okay good job so can you",
   "createdAt": "2026-10-06T17:43:16.070Z",
   "filename": "c20040ec-d9e8-418d-bff3-4401dbcdbb70.json",
-  "geminiStarted": false,
-  "messages": []
+  "geminiStarted": true,
+  "messages": [
+    {
+      "id": "a5e5a0bc-40af-45d7-9ad8-a924c2daa55e",
+      "role": "user",
+      "content": "Okay good job so can you go through bot and rate it you know they are different personality and different difficult level as well so rate it also I noticed a bug it’s whenever I m the first person to suspect the you’ll see the other bots suspecting themselves all at once and somehow I used only one suspect but mine end being exhausted I don’t understand how that works and why they all suspect each other and when I do it first so weird.",
+      "status": "pending",
+      "model": "gemini-3.8-flash-high",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-06T17:43:18.494Z",
+      "sender": "ios",
+      "is_cancelled": false
+    },
+    {
+      "id": "bb7b5081-5d84-427e-a4bd-038caeb33a4f",
+      "role": "agent",
+      "content": "Your weekly Google allowance for this model is used up.\nIt comes back in about an hour.\nTwo ways to keep going now:\n- Pick another model in the app — each family has its own allowance, and the picker shows what's left.\n- Get more from Google: https://antigravity.google/g1-upgrade",
+      "status": "error",
+      "model": "gemini-3.8-flash-high",
+      "client_type": "gemini-bridge",
+      "parent_message_id": "a5e5a0bc-40af-45d7-9ad8-a924c2daa55e",
+      "created_at": "2026-10-06T17:43:35.875Z",
+      "sender": "macOS",
+      "is_cancelled": false
+    },
+    {
+      "id": "4247bd93-d1e4-4a13-a7ee-a54e7374639e",
+      "role": "user",
+      "content": "Okay good job so can you go through bot and rate it you know they are different personality and different difficult level as well so rate it also I noticed a bug it’s whenever I m the first person to suspect the you’ll see the other bots suspecting themselves all at once and somehow I used only one suspect but mine end being exhausted I don’t understand how that works and why they all suspect each other and when I do it first so weird.",
+      "status": "pending",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-06T17:44:18.354Z",
+      "sender": "ios",
+      "is_cancelled": false
+    }
+  ]
 }

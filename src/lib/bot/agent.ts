@@ -147,6 +147,17 @@ export class BotAgent {
   }
 
   /**
+   * Drops any scheduled SUSPECT and restarts the cooldown (used when another SUSPECT is
+   * already being resolved, or after time was skipped).
+   */
+  cancelPendingSuspect(now: number): void {
+    if (this.memory.plannedAction?.action.type === "suspect") {
+      this.memory.plannedAction = null;
+    }
+    this.memory.lastSuspectAt = now + this.profile.suspectCooldownMs;
+  }
+
+  /**
    * Main decision tick: evaluates observation and plans or executes actions.
    * Returns an action if ready to execute right now (`executeAt <= obs.now`).
    */

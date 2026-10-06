@@ -179,6 +179,13 @@ export class LocalMatch {
     const executed: Array<{ action: GameAction; outcome: RoundResult | null }> = [];
     if (this.state.status !== "playing") return executed;
 
+    // The UI pauses stepping while a SUSPECT reveal plays. Skip that paused time instead of
+    // replaying it in one burst, which made every bot fire SUSPECT at the same instant.
+    if (targetTime - this.now > 1000) {
+      this.now = targetTime - stepMs;
+      for (const bot of this.bots.values()) bot.cancelPendingSuspect(this.now);
+    }
+
     while (this.now < targetTime && this.state.status === "playing") {
       this.now = Math.min(this.now + stepMs, targetTime);
 
@@ -193,7 +200,9 @@ export class LocalMatch {
             if (this.onSuspectIntent) {
               this.onSuspectIntent(decision.action);
               executed.push({ action: decision.action, outcome: null });
-              break;
+              // Only one SUSPECT can be in flight at a time; drop every other bot's pending call.
+              for (const other of this.bots.values()) other.cancelPendingSuspect(this.now);
+              return executed;
             } else {
               // Headless / fallback auto-resolve:
               const targetId = decision.action.targetPlayerId;
