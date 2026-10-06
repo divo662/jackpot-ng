@@ -466,6 +466,24 @@ export function resolveSuspect(
   };
 }
 
+/**
+ * Defender chooses two cards to disprove a SUSPECT call.
+ * If possible, they will always reveal two different suits.
+ */
+export function chooseSuspectProofCards(hand: JackpotCard[]): JackpotCard[] {
+  if (hand.length <= 2) return [...hand];
+
+  for (let i = 0; i < hand.length - 1; i++) {
+    for (let j = i + 1; j < hand.length; j++) {
+      if (hand[i].suit !== hand[j].suit) {
+        return [hand[i], hand[j]];
+      }
+    }
+  }
+
+  return [hand[0], hand[1]];
+}
+
 export function applyRoundScore(scores: ScoreBoard, result: RoundResult): ScoreBoard {
   if (!result.scoringTeam) return { ...scores };
   return {

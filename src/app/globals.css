@@ -9336,6 +9336,19 @@ button {
   margin: 0;
 }
 
+.suspect-proof-cards {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 4px 0 2px;
+}
+
+.suspect-proof-cards .whot-card {
+  width: 70px;
+  min-width: 70px;
+}
+
 /* Jackpot Celebration Overlay */
 .jackpot-celebration-overlay {
   position: fixed;
@@ -13499,4 +13512,3 @@ button {
     box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
   }
 }
-

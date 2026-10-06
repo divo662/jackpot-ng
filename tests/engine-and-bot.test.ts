@@ -12,7 +12,7 @@ import {
   type RoundState,
 } from "../src/lib/engine";
 import { setupJackpotRound, type PlayerSlot } from "../src/lib/deck";
-import { findFourOfAKind } from "../src/lib/game";
+import { chooseSuspectProofCards, findFourOfAKind } from "../src/lib/game";
 import { createRng } from "../src/lib/rng";
 import { BOT_PROFILES } from "../src/lib/bot/profiles";
 import { choosePassCard, estimateOpponentFour, suspectProbability } from "../src/lib/bot/strategy";
@@ -293,6 +293,31 @@ console.log("Starting Engine & Bot Test Suite...\n");
   console.log("  ✓ Two identical seeds produced exact identical action sequences");
 }
 
+// TEST 9: Suspect Two-Card Proof Selection
+{
+  console.log("Test 9: SUSPECT Proof Card Selection");
+  const refuteHand = [
+    { id: "r1", suit: "circle" as const },
+    { id: "r2", suit: "triangle" as const },
+    { id: "r3", suit: "circle" as const },
+    { id: "r4", suit: "circle" as const },
+  ];
+  const proof = chooseSuspectProofCards(refuteHand);
+  assert.equal(proof.length, 2);
+  assert.notEqual(proof[0].suit, proof[1].suit, "Defender should show two different suits when possible");
+
+  const caughtHand = [
+    { id: "c1", suit: "star" as const },
+    { id: "c2", suit: "star" as const },
+    { id: "c3", suit: "star" as const },
+    { id: "c4", suit: "star" as const },
+  ];
+  const caughtProof = chooseSuspectProofCards(caughtHand);
+  assert.equal(caughtProof.length, 2);
+  assert.equal(caughtProof[0].suit, caughtProof[1].suit, "When hand is complete set, proof cards must match");
+  console.log("  ✓ Defender reveals two different suits when possible, matching suits when caught");
+}
+
 console.log("\n==========================================");
-console.log("ALL 8 ENGINE & BOT TESTS PASSED CLEANLY!");
+console.log("ALL 9 ENGINE & BOT TESTS PASSED CLEANLY!");
 console.log("==========================================");
