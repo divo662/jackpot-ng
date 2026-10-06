@@ -8,7 +8,7 @@ import { JackpotNavBar } from "@/components/JackpotNavBar";
 import { HowToPlayInteractive } from "@/components/HowToPlayInteractive";
 import landingBackground from "@/assets/images/home-bg.jpg";
 import mobileLandingBackground from "@/assets/images/mobile-bg.jpg";
-import { type PlayerSlot, type Suit, type Team } from "@/lib/deck";
+import { type JackpotCard, type PlayerSlot, type Suit, type Team } from "@/lib/deck";
 import { DEFAULT_PREFERENCES, isSfxMuted, readPreferences, writePreferences, type GamePreferences } from "@/lib/preferences";
 import { playGameSound, type GameSound } from "@/lib/sound";
 import {
@@ -23,6 +23,7 @@ import {
   passCard,
   resolveJackpot,
   resolveSuspect,
+  chooseSuspectProofCards,
   rotatePlayersForViewer,
   SIGNAL_DECISION_WINDOW_MS,
   SUSPECT_ATTEMPTS_PER_TEAM,
@@ -94,6 +95,7 @@ type TableToastKind = "info" | "success" | "warning" | "error" | "game";
 type TableToast = { id: string; kind: TableToastKind; title: string; message: string };
 type PassFlight = { id: string; fromX: number; fromY: number; dx: number; dy: number; midX: number; midY: number };
 type ReactionEvent = NonNullable<GameSnapshot["publicReactions"]>[number];
+type SuspectRevealPreview = { targetName: string; cards: JackpotCard[]; isRefuted: boolean };
 
 const SEAT_CLASS_BY_COUNT: Record<number, readonly string[]> = {
   4: ["seat-you", "seat-w", "seat-n", "seat-e"],
@@ -261,6 +263,7 @@ export function JackpotApp() {
   } | null>(null);
   const [suspectModalOpen, setSuspectModalOpen] = useState(false);
   const [suspectRevealing, setSuspectRevealing] = useState(false);
+  const [suspectRevealPreview, setSuspectRevealPreview] = useState<SuspectRevealPreview | null>(null);
   const [jackpotModalOpen, setJackpotModalOpen] = useState(false);
   const [jackpotCelebrating, setJackpotCelebrating] = useState(false);
   const [roundTransitionOpen, setRoundTransitionOpen] = useState(false);
@@ -2015,22 +2018,36 @@ export function JackpotApp() {
     executeJackpot();
   };
 
-  const executeSuspect = (targetPlayerId?: string) => {
+  const executeSuspect = async (targetPlayerId?: string) => {
     if (!game || busy) return;
     setSuspectModalOpen(false);
     setSuspectRevealing(true);
     playCue("suspense");
 
+    const caller = game.players.find((player) => player.id === viewerPlayerId);
+    const callerTeam = caller?.team ?? "Alpha";
     const targetPlayer = targetPlayerId ? game.players.find((p) => p.id === targetPlayerId) : undefined;
     const isSharedOnline = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
+    const canRevealProof = Boolean(targetPlayer && targetPlayer.team !== callerTeam && !isSharedOnline);
+
+    if (canRevealProof && targetPlayer) {
+      const proofCards = chooseSuspectProofCards(targetPlayer.hand);
+      if (proofCards.length === 2) {
+        setSuspectRevealPreview({
+          targetName: targetPlayer.name,
+          cards: proofCards,
+          isRefuted: proofCards[0].suit !== proofCards[1].suit,
+        });
+        await new Promise((resolve) => window.setTimeout(resolve, 550));
+        setSuspectRevealPreview(null);
+      }
+    }
 
     if (isSharedOnline) {
       void requestServerGameAction("suspect", undefined, undefined, targetPlayerId);
       window.setTimeout(() => setSuspectRevealing(false), 400);
     } else if (localMatchRef.current) {
       const match = localMatchRef.current;
-      const caller = game.players.find((player) => player.id === viewerPlayerId);
-      const callerTeam = caller?.team ?? "Alpha";
       const outcome = match.submitHumanAction({ type: "suspect", playerId: viewerPlayerId, targetPlayerId });
       if (outcome.ok && outcome.result) {
         if (outcome.result.valid) {
@@ -2052,11 +2069,11 @@ export function JackpotApp() {
       }
       window.setTimeout(() => setSuspectRevealing(false), 400);
     } else {
-      const caller = game.players.find((player) => player.id === viewerPlayerId);
-      const callerTeam = caller?.team ?? "Alpha";
       const remaining = localSuspectAttempts[callerTeam] ?? 0;
       if (remaining <= 0) {
         setStatus("Your team has used all three SUSPECT calls this round.");
+        setSuspectRevealPreview(null);
+        setSuspectRevealing(false);
         return;
       }
       const outcome = resolveSuspect(game, viewerPlayerId, targetPlayerId);
@@ -2091,7 +2108,7 @@ export function JackpotApp() {
       showTableToast("warning", "No calls left", "Your team has used all 3 SUSPECT calls for this round.");
       return;
     }
-    executeSuspect(targetPlayerId);
+    void executeSuspect(targetPlayerId);
   };
 
   const handleNextRoundWithSignal = async (signalIdToUse: string) => {
@@ -4388,11 +4405,30 @@ export function JackpotApp() {
             {suspectRevealing && (
               <div className="table-suspense-overlay" aria-live="assertive">
                 <div className="suspense-card">
-                  <div className="suspense-radar-ring" />
-                  <span className="suspense-icon">🔍</span>
-                  <span className="suspense-eyebrow">FASTEST FINGERS</span>
-                  <h3>VERIFYING OPPONENT HANDS...</h3>
-                  <p>Interception call dispatched!</p>
+                  {suspectRevealPreview ? (
+                    <>
+                      <span className="suspense-eyebrow">SUSPECT CHECK</span>
+                      <h3>{suspectRevealPreview.targetName} reveals 2 cards</h3>
+                      <div className="suspect-proof-cards" aria-label="Suspect reveal preview">
+                        {suspectRevealPreview.cards.map((card) => (
+                          <WhotCard key={`suspect-proof-${card.id}`} card={card} compact />
+                        ))}
+                      </div>
+                      <p>
+                        {suspectRevealPreview.isRefuted
+                          ? "Two different cards shown — no complete set."
+                          : "Matching cards shown — complete set confirmed."}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="suspense-radar-ring" />
+                      <span className="suspense-icon">🔍</span>
+                      <span className="suspense-eyebrow">FASTEST FINGERS</span>
+                      <h3>VERIFYING OPPONENT HANDS...</h3>
+                      <p>Interception call dispatched!</p>
+                    </>
+                  )}
                 </div>
               </div>
             )}
