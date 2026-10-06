@@ -124,6 +124,30 @@
       "created_at": "2026-10-06T18:16:11.193Z",
       "sender": "ios",
       "is_cancelled": false
+    },
+    {
+      "id": "dcb12b37-90ed-4cf0-a64f-182fe6cd953c",
+      "role": "agent",
+      "content": "Now I need to find where the home screen renders in JackpotApp.\nI added a small \"Add to Home Screen\" hint to the bottom of the home page and the settings page. I haven't built or tested it, because the dependencies aren't installed here.\n\nThe new component is [InstallPrompt.tsx](https://github.com/divo662/jackpot-ng/blob/main/src/components/InstallPrompt.tsx), and it's wired into [JackpotApp.tsx](https://github.com/divo662/jackpot-ng/blob/main/src/components/JackpotApp.tsx).\n\n- **Android and Chrome:** it shows a small pill with an **Install** link that opens the browser's install prompt.\n- **iPhone Safari:** it shows the manual steps: tap Share, then \"Add to Home Screen\".\n- **Hidden when not needed:** it doesn't show if the app is already installed, and the ✕ button hides it for good on that device.\n\nThe pill is deliberately small and unobtrusive. Check how it looks in the layout, since I styled it inline and couldn't see it rendered.",
+      "status": "completed",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": "9839fc00-2ac5-4dc9-975c-a8406dd18eb5",
+      "created_at": "2026-10-06T18:16:42.307Z",
+      "sender": "macOS",
+      "is_cancelled": false
+    },
+    {
+      "id": "164374ce-7c34-4c2b-a3a6-83d727ae504d",
+      "role": "user",
+      "content": "Okay base in everything you understand about the game build a privacy and terms of service page for the game and then add link to it on the settings page then contact of dm owner? Use x link to take them to this profile divo_dev",
+      "status": "pending",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-06T18:18:08.700Z",
+      "sender": "ios",
+      "is_cancelled": false
     }
   ]
 }

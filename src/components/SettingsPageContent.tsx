@@ -354,6 +354,26 @@ export function SettingsPageContent({
           </div>
         </section>
 
+        {/* Legal & contact */}
+        <section
+          aria-label="Legal and contact"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            gap: "6px 14px",
+            margin: "20px 0 4px",
+            fontSize: 13,
+            opacity: 0.85,
+          }}
+        >
+          <a href="/privacy" style={{ color: "#fbbf24" }}>Privacy Policy</a>
+          <a href="/terms" style={{ color: "#fbbf24" }}>Terms of Service</a>
+          <a href="https://x.com/divo_dev" target="_blank" rel="noopener noreferrer" style={{ color: "#fbbf24" }}>
+            Contact: DM @divo_dev on X
+          </a>
+        </section>
+
         {/* Bottom Dock / Navigation */}
         <div className="settings-footer-dock">
           <button type="button" className="game-ghost-btn" onClick={onBack}>
