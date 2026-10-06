@@ -100,6 +100,30 @@
       "created_at": "2026-10-06T18:05:50.283Z",
       "sender": "ios",
       "is_cancelled": false
+    },
+    {
+      "id": "ce54928e-0a91-4895-9f1c-c5e1910e8807",
+      "role": "agent",
+      "content": "I moved the Hard and Normal bots to the midpoint between the original settings and my first, slower ones. I haven't playtested it. All the changes are in [profiles.ts](https://github.com/divo662/jackpot-ng/blob/main/src/lib/bot/profiles.ts).\n\n| Setting | Original | Too lenient | **Now** |\n|---|---|---|---|\n| Hard reaction time | 0.9–2.2s | 2.8–4.8s | **1.8–3.4s** |\n| Hard suspect chance (top / mid / low) | 85% / 40% / 6% | 70% / 30% / 4% | **78% / 35% / 5%** |\n| Hard cooldown between calls | 4.5s | 7s | **5.5s** |\n| Normal reaction time | 1.6–3.2s | 3–5.2s | **2.3–4.2s** |\n\nOn Hard, your partner now has roughly 1–2 seconds more to call JACKPOT after a signal before a bot can suspect. That is enough for a quick reaction but not enough to ignore the signal. Bots still catch sloppy or repeated signalling.\n\nIf it still feels too easy or too harsh, tell me which and I'll nudge it again.",
+      "status": "completed",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": "b988be29-325b-4ed3-a2a4-ef4fec6eb26e",
+      "created_at": "2026-10-06T18:06:03.889Z",
+      "sender": "macOS",
+      "is_cancelled": false
+    },
+    {
+      "id": "9839fc00-2ac5-4dc9-975c-a8406dd18eb5",
+      "role": "user",
+      "content": "In the home page and settings page can Ed just a add a small prompt like just small on the bottom for them to add to Home Screen as an app and all right",
+      "status": "pending",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-06T18:16:11.193Z",
+      "sender": "ios",
+      "is_cancelled": false
     }
   ]
 }
