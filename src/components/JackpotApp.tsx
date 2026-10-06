@@ -6,6 +6,7 @@ import { CardFan, WhotCard, SuitMark, SUIT_LABELS } from "@/components/WhotCard"
 import { MiniMusicPlayer } from "@/components/MiniMusicPlayer";
 import { JackpotNavBar } from "@/components/JackpotNavBar";
 import { HowToPlayInteractive } from "@/components/HowToPlayInteractive";
+import { SuspectRevealOverlay, type SuspectSequenceData } from "@/components/SuspectRevealOverlay";
 import landingBackground from "@/assets/images/home-bg.jpg";
 import mobileLandingBackground from "@/assets/images/mobile-bg.jpg";
 import { type PlayerSlot, type Suit, type Team } from "@/lib/deck";
@@ -261,6 +262,7 @@ export function JackpotApp() {
   } | null>(null);
   const [suspectModalOpen, setSuspectModalOpen] = useState(false);
   const [suspectRevealing, setSuspectRevealing] = useState(false);
+  const [suspectSequence, setSuspectSequence] = useState<SuspectSequenceData | null>(null);
   const [jackpotModalOpen, setJackpotModalOpen] = useState(false);
   const [jackpotCelebrating, setJackpotCelebrating] = useState(false);
   const [roundTransitionOpen, setRoundTransitionOpen] = useState(false);
@@ -2015,32 +2017,38 @@ export function JackpotApp() {
     executeJackpot();
   };
 
-  const executeSuspect = (targetPlayerId?: string) => {
-    if (!game || busy) return;
-    setSuspectModalOpen(false);
-    setSuspectRevealing(true);
-    playCue("suspense");
+  const handleSuspectSequenceComplete = (selectedCardIds: [string, string], isSuccess: boolean) => {
+    const seq = suspectSequence;
+    setSuspectSequence(null);
+    setBusy(false);
+    if (!seq || !game) return;
 
-    const targetPlayer = targetPlayerId ? game.players.find((p) => p.id === targetPlayerId) : undefined;
+    const callerTeam = (game.players.find((p) => p.id === seq.callerId)?.team ?? you?.team ?? "Alpha") as "Alpha" | "Bravo";
+    const targetPlayer = game.players.find((p) => p.id === seq.targetId);
     const isSharedOnline = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
 
     if (isSharedOnline) {
-      void requestServerGameAction("suspect", undefined, undefined, targetPlayerId);
-      window.setTimeout(() => setSuspectRevealing(false), 400);
+      void requestServerGameAction("suspect", undefined, undefined, seq.targetId);
     } else if (localMatchRef.current) {
       const match = localMatchRef.current;
-      const caller = game.players.find((player) => player.id === viewerPlayerId);
-      const callerTeam = caller?.team ?? "Alpha";
-      const outcome = match.submitHumanAction({ type: "suspect", playerId: viewerPlayerId, targetPlayerId });
+      const outcome = match.resolveSuspectAction({
+        type: "suspect",
+        playerId: seq.callerId,
+        targetPlayerId: seq.targetId,
+        selectedCardIds,
+      });
       if (outcome.ok && outcome.result) {
         if (outcome.result.valid) {
-          setMatchStats((prev) => ({ ...prev, suspectsCaught: prev.suspectsCaught + 1 }));
-          const allOther = game.players.filter((p) => p.id !== viewerPlayerId).map((p) => p.id);
+          if (seq.callerId === viewerPlayerId) {
+            setMatchStats((prev) => ({ ...prev, suspectsCaught: prev.suspectsCaught + 1 }));
+          }
+          const allOther = game.players.filter((p) => p.id !== seq.callerId).map((p) => p.id);
           triggerTableAutoReaction(allOther, "eyes");
           finishRound(outcome.result);
         } else {
-          playCue("false_call");
-          setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
+          if (seq.callerId === viewerPlayerId) {
+            setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
+          }
           const opponents = game.players.filter((p) => p.team !== callerTeam).map((p) => p.id);
           triggerTableAutoReaction(opponents, "laugh");
           const remaining = match.state.suspectsRemaining[callerTeam] ?? 0;
@@ -2050,38 +2058,79 @@ export function JackpotApp() {
           showTableToast("warning", "False Call", `${targetName} did not have four of a kind! ${remaining} calls left.`);
         }
       }
-      window.setTimeout(() => setSuspectRevealing(false), 400);
     } else {
-      const caller = game.players.find((player) => player.id === viewerPlayerId);
-      const callerTeam = caller?.team ?? "Alpha";
       const remaining = localSuspectAttempts[callerTeam] ?? 0;
-      if (remaining <= 0) {
-        setStatus("Your team has used all three SUSPECT calls this round.");
-        return;
-      }
-      const outcome = resolveSuspect(game, viewerPlayerId, targetPlayerId);
-      setLocalSuspectAttempts((current) => ({ ...current, [callerTeam]: remaining - 1 }));
-
+      setLocalSuspectAttempts((current) => ({ ...current, [callerTeam]: Math.max(0, remaining - 1) }));
+      const outcome = resolveSuspect(game, seq.callerId, seq.targetId, selectedCardIds);
       if (outcome.valid) {
-        setMatchStats((prev) => ({ ...prev, suspectsCaught: prev.suspectsCaught + 1 }));
-        const allOther = game.players.filter((p) => p.id !== viewerPlayerId).map((p) => p.id);
+        if (seq.callerId === viewerPlayerId) {
+          setMatchStats((prev) => ({ ...prev, suspectsCaught: prev.suspectsCaught + 1 }));
+        }
+        const allOther = game.players.filter((p) => p.id !== seq.callerId).map((p) => p.id);
         triggerTableAutoReaction(allOther, "eyes");
         finishRound(outcome);
       } else {
-        playCue("false_call");
-        setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
+        if (seq.callerId === viewerPlayerId) {
+          setMatchStats((prev) => ({ ...prev, falseCalls: prev.falseCalls + 1 }));
+        }
         const opponents = game.players.filter((p) => p.team !== callerTeam).map((p) => p.id);
         triggerTableAutoReaction(opponents, "laugh");
         const targetName = targetPlayer ? targetPlayer.name : "opponent";
-        setStatus(`FALSE SUSPECT on ${targetName} — ${remaining - 1} team calls remain.`);
-        showTableToast("warning", "False Call", `${targetName} did not have four of a kind! ${remaining - 1} calls left.`);
+        setStatus(`FALSE SUSPECT on ${targetName} — ${Math.max(0, remaining - 1)} team calls remain.`);
+        showTableToast("warning", "False Call", `${targetName} did not have four of a kind! ${Math.max(0, remaining - 1)} calls left.`);
       }
-      window.setTimeout(() => setSuspectRevealing(false), 400);
     }
   };
 
+  const executeSuspect = (targetPlayerId?: string) => {
+    if (!game || busy || suspectSequence) return;
+
+    let targetPlayer = targetPlayerId ? game.players.find((p) => p.id === targetPlayerId) : undefined;
+    if (!targetPlayer) {
+      // Find an opponent who signaled recently
+      const recentSignal = signalBursts.find((s) => s.playerId !== partner?.id && s.playerId !== viewerPlayerId);
+      if (recentSignal) {
+        targetPlayer = game.players.find((p) => p.id === recentSignal.playerId);
+      }
+    }
+    if (!targetPlayer) {
+      // Pick opponent who has passed 5th card
+      targetPlayer =
+        game.players.find((p) => p.team !== you?.team && p.hand.length === 4) ??
+        game.players.find((p) => p.team !== you?.team);
+    }
+
+    if (!targetPlayer) return;
+
+    if (targetPlayer.team === you?.team) {
+      showTableToast("warning", "Friendly Fire", "You cannot suspect your own team!");
+      return;
+    }
+
+    // "When a player uses SUSPECT after the opponent has passed their fifth card"
+    if (targetPlayer.hand.length > 4) {
+      showTableToast(
+        "warning",
+        "Wait for Pass",
+        `Cannot suspect ${targetPlayer.name} while they hold a 5th card — wait for them to pass!`
+      );
+      return;
+    }
+
+    setBusy(true);
+    setSuspectSequence({
+      callerId: viewerPlayerId,
+      callerName: you?.name ?? "You",
+      targetId: targetPlayer.id,
+      targetName: targetPlayer.name,
+      targetHand: targetPlayer.hand,
+      isTargetHuman: false,
+      isCallerHuman: true,
+    });
+  };
+
   const onSuspect = (targetPlayerId?: string) => {
-    if (!game || busy) return;
+    if (!game || busy || suspectSequence) return;
     const currentTeam = (you?.team ?? "Alpha") as "Alpha" | "Bravo";
     const isSharedOnline = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
     const remaining = isSharedOnline
@@ -2536,8 +2585,28 @@ export function JackpotApp() {
     const match = localMatchRef.current;
     if (match.state.status !== "playing") return;
 
+    // Attach interceptor for bot suspect calls to trigger the dramatic reveal sequence
+    match.onSuspectIntent = (action) => {
+      const caller = match.state.game.players.find((p) => p.id === action.playerId);
+      const target = action.targetPlayerId
+        ? match.state.game.players.find((p) => p.id === action.targetPlayerId)
+        : match.state.game.players.find((p) => p.team !== caller?.team && p.hand.length === 4);
+      if (!caller || !target) return;
+
+      setBusy(true);
+      setSuspectSequence({
+        callerId: caller.id,
+        callerName: caller.name,
+        targetId: target.id,
+        targetName: target.name,
+        targetHand: target.hand,
+        isTargetHuman: target.id === viewerPlayerId,
+        isCallerHuman: caller.id === viewerPlayerId,
+      });
+    };
+
     const interval = window.setInterval(() => {
-      if (match.state.status !== "playing") return;
+      if (match.state.status !== "playing" || suspectSequence !== null) return;
       const beforePassCount = match.state.game.passCount;
       const beforeSignalsCount = match.state.game.publicSignals?.length ?? 0;
 
@@ -2582,7 +2651,7 @@ export function JackpotApp() {
     }, 120);
 
     return () => window.clearInterval(interval);
-  }, [screen, notifyCardPass, notifySignal, finishRound, showTableToast]);
+  }, [screen, suspectSequence, viewerPlayerId, notifyCardPass, notifySignal, finishRound, showTableToast]);
 
   if (!hydrated) {
     return (
@@ -4268,7 +4337,7 @@ export function JackpotApp() {
                       hasFourOfAKind={player.id === viewerPlayerId && Boolean(yourFour) && player.hand.length === 4}
                       activeSignal={playerSignal}
                       isTutorialPickCard={isTutorialMatch && (tutorialStep === "table_pick_card" || (tutorialStep === "table_cards_intro" && !selectedCardId))}
-                      canSuspect={!busy && suspectAttemptsLeft > 0}
+                      canSuspect={!busy && !suspectSequence && suspectAttemptsLeft > 0 && player.hand.length === 4}
                       onSuspectTarget={(targetId) => onSuspect(targetId)}
                     />
                   );
@@ -4369,7 +4438,7 @@ export function JackpotApp() {
                     <button
                       type="button"
                       className={`dock-action-btn suspect ${isTutorialMatch && tutorialStep === "round2_suspicious_gesture" ? "tutorial-spotlight-btn suspect-glow" : ""}`}
-                      disabled={busy || suspectAttemptsLeft <= 0}
+                      disabled={busy || Boolean(suspectSequence) || suspectAttemptsLeft <= 0}
                       onClick={() => onSuspect()}
                       title={`Call SUSPECT! Tap an opponent's profile directly or click here (${suspectAttemptsLeft} calls remaining).`}
                     >
@@ -4384,17 +4453,14 @@ export function JackpotApp() {
               </div>
             </div>
 
-            {/* Suspect Quick Reveal Feedback */}
-            {suspectRevealing && (
-              <div className="table-suspense-overlay" aria-live="assertive">
-                <div className="suspense-card">
-                  <div className="suspense-radar-ring" />
-                  <span className="suspense-icon">🔍</span>
-                  <span className="suspense-eyebrow">FASTEST FINGERS</span>
-                  <h3>VERIFYING OPPONENT HANDS...</h3>
-                  <p>Interception call dispatched!</p>
-                </div>
-              </div>
+            {/* Jackpot Suspect Reveal Overlay */}
+            {suspectSequence && (
+              <SuspectRevealOverlay
+                sequence={suspectSequence}
+                viewerPlayerId={viewerPlayerId}
+                playCue={playCue}
+                onComplete={handleSuspectSequenceComplete}
+              />
             )}
 
             {/* Jackpot Celebration Overlay */}

@@ -317,22 +317,25 @@ export class BotAgent {
     const chanceToSuspect = suspectProbability(noisyEstimate, this.profile);
 
     if (chanceToSuspect > 0 && this.rng.chance(chanceToSuspect)) {
-      // Find the specific opponent with the highest individual suspicion
+      // Find the specific opponent with the highest individual suspicion who has passed their 5th card
       const opponentEntries = Object.entries(estimate.perPlayer);
       let targetPlayerId: string | undefined = undefined;
       let maxSuspicion = -1;
       for (const [pId, score] of opponentEntries) {
-        if (score > maxSuspicion) {
+        const seat = obs.seats.find((s) => s.id === pId);
+        if (seat && seat.handCount === 4 && score > maxSuspicion) {
           maxSuspicion = score;
           targetPlayerId = pId;
         }
       }
 
-      // If nobody has an active gesture, pick a random opponent
+      // If nobody has an active gesture, pick an opponent who has passed their 5th card
       if (!targetPlayerId) {
-        const opponents = obs.seats.filter((seat) => seat.team !== obs.me.team);
+        const opponents = obs.seats.filter((seat) => seat.team !== obs.me.team && seat.handCount === 4);
         targetPlayerId = opponents.length > 0 ? this.rng.pick(opponents).id : undefined;
       }
+
+      if (!targetPlayerId) return null;
 
       const delay = this.rng.range(
         this.profile.suspectReactionMs[0],

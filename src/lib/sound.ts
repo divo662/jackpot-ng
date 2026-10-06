@@ -1,6 +1,7 @@
 export type GameSound =
   | "pass"
   | "card_click"
+  | "card_flip"
   | "signal"
   | "reaction"
   | "success"
@@ -155,6 +156,24 @@ function renderProceduralSound(ctx: AudioContext, sound: GameSound, volume: numb
       gain.connect(ctx.destination);
       osc.start(now);
       osc.stop(now + 0.055);
+      break;
+    }
+
+    case "card_flip": {
+      // Tactile 3D card flip whoosh & snap
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.exponentialRampToValueAtTime(180, now + 0.08);
+
+      gain.gain.setValueAtTime(masterVol * 0.7, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.085);
       break;
     }
 

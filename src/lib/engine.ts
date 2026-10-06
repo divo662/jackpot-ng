@@ -34,7 +34,7 @@ export type GameAction =
   /** Flash a decoy gesture. It must not be the team's real signal. */
   | { type: "fake-signal"; playerId: string; signalId: string }
   | { type: "jackpot"; playerId: string }
-  | { type: "suspect"; playerId: string; targetPlayerId?: string }
+  | { type: "suspect"; playerId: string; targetPlayerId?: string; selectedCardIds?: [string, string] }
   | { type: "reaction"; playerId: string; reactionId: string };
 
 /**
@@ -190,7 +190,7 @@ export function applyAction(state: RoundState, action: GameAction, now: number):
     case "suspect": {
       const remaining = state.suspectsRemaining[actor.team] ?? 0;
       if (remaining <= 0) return reject("Your team has no SUSPECT calls left this round.");
-      const result = resolveSuspect(state.game, actor.id, action.targetPlayerId);
+      const result = resolveSuspect(state.game, actor.id, action.targetPlayerId, action.selectedCardIds);
       const event: PublicEvent = {
         seq,
         at: now,

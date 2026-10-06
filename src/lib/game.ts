@@ -362,17 +362,38 @@ export function resolveJackpot(
 }
 
 /**
+ * Choose two cards to reveal when suspected.
+ * If the player does not have four-of-a-kind, chooses two cards of different suits to defeat the suspect.
+ * If the player holds four-of-a-kind (all 4 cards same suit), any chosen pair will be the same suit.
+ */
+export function chooseSuspectDefenseCards(hand: JackpotCard[]): [JackpotCard, JackpotCard] {
+  const cards = hand.filter((c) => !c.isPlaceholder);
+  if (cards.length >= 2) {
+    for (let i = 0; i < cards.length; i++) {
+      for (let j = i + 1; j < cards.length; j++) {
+        if (cards[i].suit !== cards[j].suit) {
+          return [cards[i], cards[j]];
+        }
+      }
+    }
+    return [cards[0], cards[1]];
+  }
+  return [hand[0], hand[1]];
+}
+
+/**
  * SUSPECT: you believe an opponent is sitting on a four-of-a-kind.
  * When targetPlayerId is provided (Option A: targeted suspect):
- *   - Checks specifically whether that targeted opponent holds four-of-a-kind.
- *   - If they do: you catch them! +1 point to caller's team.
- *   - If they do not: false alarm! (Even if their partner secretly had four, the decoy worked).
+ *   - If selectedCardIds is provided (Suspect Reveal mechanic):
+ *     Evaluates the two chosen cards. If they match, suspect succeeds (CAUGHT!); if different, suspect fails.
+ *   - Otherwise: checks whether target holds four-of-a-kind.
  * When targetPlayerId is omitted (fallback): checks if any opponent holds four-of-a-kind.
  */
 export function resolveSuspect(
   state: GameSnapshot,
   callingPlayerId: string,
   targetPlayerId?: string,
+  selectedCardIds?: [string, string],
 ): RoundResult {
   const caller = state.players.find((player) => player.id === callingPlayerId);
   if (!caller) throw new Error("Caller not found.");
@@ -394,6 +415,37 @@ export function resolveSuspect(
         title: "Friendly Fire!",
         detail: `${caller.name} suspected teammate ${target.name}! You cannot suspect your own team.`,
       };
+    }
+
+    if (selectedCardIds && selectedCardIds.length === 2) {
+      const cardA = target.hand.find((c) => c.id === selectedCardIds[0]);
+      const cardB = target.hand.find((c) => c.id === selectedCardIds[1]);
+      if (cardA && cardB) {
+        const isMatch = cardA.suit === cardB.suit;
+        if (isMatch) {
+          return {
+            kind: "suspect",
+            valid: true,
+            callingTeam: caller.team,
+            callingPlayerId,
+            scoringTeam: caller.team,
+            suit: cardA.suit,
+            title: "CAUGHT!",
+            detail: `${caller.name} caught ${target.name} (${target.team})! Both cards are ${cardA.suit}s. +1 ${caller.team}.`,
+          };
+        } else {
+          return {
+            kind: "suspect",
+            valid: false,
+            callingTeam: caller.team,
+            callingPlayerId,
+            scoringTeam: null,
+            suit: null,
+            title: "SUSPECT FAILED",
+            detail: `${caller.name} suspected ${target.name}, but the revealed cards did not match (${cardA.suit} & ${cardB.suit}). Wrong read!`,
+          };
+        }
+      }
     }
 
     const targetSuit = target.hand.length === 4 ? findFourOfAKind(target.hand) : null;

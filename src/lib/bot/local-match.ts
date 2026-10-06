@@ -24,7 +24,7 @@ import {
   type RoundRules,
   type RoundState,
 } from "@/lib/engine";
-import { type RoundResult } from "@/lib/game";
+import { type RoundResult, chooseSuspectDefenseCards } from "@/lib/game";
 import { ALL_SIGNAL_IDS } from "@/lib/signals";
 import { createRng } from "@/lib/rng";
 import { BotAgent } from "./agent";
@@ -70,6 +70,7 @@ export class LocalMatch {
   state: RoundState;
   bots: Map<string, BotAgent>;
   now: number;
+  public onSuspectIntent?: (action: { type: "suspect"; playerId: string; targetPlayerId?: string }) => void;
 
   constructor(config: LocalMatchConfig, startTime?: number) {
     this.humanId = config.humanPlayerId ?? "player-you";
@@ -188,16 +189,54 @@ export class LocalMatch {
         const decision = bot.think(obs);
 
         if (decision.action) {
-          const outcome = applyAction(this.state, decision.action, this.now);
-          if (outcome.ok) {
-            this.state = outcome.state;
-            executed.push({ action: decision.action, outcome: outcome.result });
+          if (decision.action.type === "suspect") {
+            if (this.onSuspectIntent) {
+              this.onSuspectIntent(decision.action);
+              executed.push({ action: decision.action, outcome: null });
+              break;
+            } else {
+              // Headless / fallback auto-resolve:
+              const targetId = decision.action.targetPlayerId;
+              const target = targetId ? this.state.game.players.find((p) => p.id === targetId) : undefined;
+              const selected = target && target.hand.length >= 2
+                ? (chooseSuspectDefenseCards(target.hand).map((c) => c.id) as [string, string])
+                : undefined;
+              const actionWithCards: GameAction = { ...decision.action, selectedCardIds: selected };
+              const outcome = applyAction(this.state, actionWithCards, this.now);
+              if (outcome.ok) {
+                this.state = outcome.state;
+                executed.push({ action: decision.action, outcome: outcome.result });
+              }
+            }
+          } else {
+            const outcome = applyAction(this.state, decision.action, this.now);
+            if (outcome.ok) {
+              this.state = outcome.state;
+              executed.push({ action: decision.action, outcome: outcome.result });
+            }
           }
         }
       }
     }
 
     return executed;
+  }
+
+  /**
+   * Resolve an intercepted suspect action (e.g. after dramatic reveal sequence).
+   */
+  resolveSuspectAction(action: {
+    type: "suspect";
+    playerId: string;
+    targetPlayerId?: string;
+    selectedCardIds?: [string, string];
+  }): { ok: boolean; error?: string; result: RoundResult | null } {
+    const outcome = applyAction(this.state, action, this.now);
+    if (!outcome.ok) {
+      return { ok: false, error: outcome.error, result: null };
+    }
+    this.state = outcome.state;
+    return { ok: true, result: outcome.result };
   }
 
   /**
