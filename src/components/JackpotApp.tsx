@@ -96,8 +96,9 @@ function getResultHype(args: {
   alphaName: string;
   bravoName: string;
   roundValid: boolean;
+  isLoss?: boolean;
 }): ResultHype {
-  const { round, alpha, bravo, alphaName, bravoName, roundValid } = args;
+  const { round, alpha, bravo, alphaName, bravoName, roundValid, isLoss } = args;
   const top = Math.max(alpha, bravo);
   const low = Math.min(alpha, bravo);
   const gap = top - low;
@@ -105,6 +106,18 @@ function getResultHype(args: {
     const winner = alpha >= WINNING_SCORE ? alphaName : bravoName;
     const loserScore = low;
     const photo = loserScore >= WINNING_SCORE - 1;
+    if (isLoss) {
+      return {
+        mode: "match-over",
+        tag: "MATCH OVER · DEFEAT",
+        headline: `${winner.toUpperCase()} WINS THE MATCH`,
+        subline: photo
+          ? `Tough battle! ${winner} claimed victory by just one letter in a thrilling finale.`
+          : `The match ends in defeat, ${loserScore}–${top}. Run it back for revenge!`,
+        bursts: ["MATCH OVER", "TOUGH FIGHT", "RUN IT BACK!"],
+        confetti: 0,
+      };
+    }
     return {
       mode: "match-over",
       tag: "MATCH OVER",
@@ -119,6 +132,16 @@ function getResultHype(args: {
     };
   }
   if (round >= 12) {
+    if (isLoss) {
+      return {
+        mode: "finale",
+        tag: `ROUND ${round} · FINALE BATTLE`,
+        headline: "THE FINALE BATTLE",
+        subline: "Tough round lost! Don't let up now — every remaining letter counts.",
+        bursts: ["TOUGH BREAK!", "HOLD THE LINE!", "FIGHT BACK!"],
+        confetti: 0,
+      };
+    }
     return {
       mode: "finale",
       tag: `ROUND ${round} · FINALE BATTLE`,
@@ -130,6 +153,16 @@ function getResultHype(args: {
   }
   if (top === WINNING_SCORE - 1) {
     const leader = alpha === top && bravo !== top ? alphaName : bravo === top && alpha !== top ? bravoName : null;
+    if (isLoss) {
+      return {
+        mode: "match-point",
+        tag: "MATCH POINT DEFENSE",
+        headline: leader ? `${leader.toUpperCase()} IS AT MATCH POINT!` : "MATCH POINT PRESSURE!",
+        subline: "Opponents are one letter away. Defend the table next round!",
+        bursts: ["DEFEND!", "DO OR DIE!", "NEXT ROUND!"],
+        confetti: 0,
+      };
+    }
     return {
       mode: "match-point",
       tag: "MATCH POINT",
@@ -140,6 +173,16 @@ function getResultHype(args: {
     };
   }
   if (top >= 4 && gap <= 1) {
+    if (isLoss) {
+      return {
+        mode: "neck-and-neck",
+        tag: "ROUND LOST · NECK AND NECK",
+        headline: "NECK AND NECK!",
+        subline: "Opponents took this round, but the race is still wide open!",
+        bursts: ["CLOSE RACE!", "SHAKE IT OFF!", "STILL IN IT!"],
+        confetti: 0,
+      };
+    }
     return {
       mode: "neck-and-neck",
       tag: "NECK AND NECK",
@@ -147,6 +190,16 @@ function getResultHype(args: {
       subline: "Nothing separates these two teams.",
       bursts: ["ON FIRE!", "TOO CLOSE!", "WHO BLINKS?"],
       confetti: roundValid ? 40 : 16,
+    };
+  }
+  if (isLoss) {
+    return {
+      mode: "rolling",
+      tag: `ROUND ${round} · LOST`,
+      headline: null,
+      subline: "",
+      bursts: ["LOST THIS ROUND", "SHAKE IT OFF!", "BOUNCE BACK!"],
+      confetti: 0,
     };
   }
   return {
@@ -940,7 +993,21 @@ export function JackpotApp() {
   }, [game, viewerPlayerId]);
   const partner = seated.find((player) => player.team === seated[0]?.team && player.id !== seated[0]?.id) ?? null;
   const you = seated[0];
-  const viewerTeam = room?.teams?.[session?.playerId ?? ""] ?? "Alpha";
+  const viewerTeam: Team = (session?.playerId ? room?.teams?.[session.playerId] : undefined) ?? you?.team ?? "Alpha";
+  const isRoundLoss = useMemo(() => {
+    if (matchWonTeam && matchWonTeam !== viewerTeam) return true;
+    if ((scores.Alpha >= WINNING_SCORE || scores.Bravo >= WINNING_SCORE) && (scores[viewerTeam] ?? 0) < WINNING_SCORE) {
+      return true;
+    }
+    if (!result) return false;
+    if (result.scoringTeam) {
+      return result.scoringTeam !== viewerTeam;
+    }
+    if (result.callingTeam === viewerTeam && !result.valid) {
+      return true;
+    }
+    return false;
+  }, [result, viewerTeam, matchWonTeam, scores]);
   const partnerPlayer = room?.players.find(
     (p) => room.teams?.[p.id] === viewerTeam && p.id !== session?.playerId
   );
@@ -961,6 +1028,7 @@ export function JackpotApp() {
     alphaName: roomCode === "practice" || localMatchRef.current ? offlineTeamName : "Alpha",
     bravoName: "Bravo",
     roundValid: Boolean(result?.valid),
+    isLoss: isRoundLoss,
   });
   const resultMatchOver = resultHype.mode === "match-over";
   const activePlayer = game?.players.find((player) => player.id === game.activePlayerId);
@@ -2463,16 +2531,18 @@ export function JackpotApp() {
       }
       return;
     }
-    const resultKey = `${round}:${result.kind}:${result.title}:${result.valid}:${result.callingPlayerId}:${result.scoringTeam ?? ""}`;
+    const resultKey = `${round}:${result.kind}:${result.title}:${result.valid}:${result.callingPlayerId}:${result.scoringTeam ?? ""}:${isRoundLoss ? "loss" : "win"}`;
     if (playedResultSoundRef.current === resultKey) return;
     playedResultSoundRef.current = resultKey;
 
-    if (result.valid) {
+    if (isRoundLoss) {
+      playCue("false_call");
+    } else if (result.valid) {
       playCue(result.kind === "suspect" ? "caught" : "jackpot");
     } else {
       playCue("false_call");
     }
-  }, [screen, result, round, playCue]);
+  }, [screen, result, round, playCue, isRoundLoss]);
 
   const handleShareResult = async () => {
     const winner = matchWonTeam ?? "Alpha";
@@ -2782,7 +2852,7 @@ export function JackpotApp() {
   const isFullWidthScreen = !isFramelessScreen;
 
   return (
-    <main className={`app-shell ${isFullWidthScreen ? "full-width" : ""} ${isFramelessScreen ? "table-mode" : ""} ${screen === "result" ? "result-mode" : ""} ${preferences.animationsEnabled ? "" : "motion-reduced"}`}>
+    <main className={`app-shell ${isFullWidthScreen ? "full-width" : ""} ${isFramelessScreen ? "table-mode" : ""} ${screen === "result" ? `result-mode ${isRoundLoss ? "result-loss-mode" : "result-win-mode"}` : ""} ${preferences.animationsEnabled ? "" : "motion-reduced"}`}>
       <div className={`scene-frame ${isFullWidthScreen ? "full-width-frame" : ""} ${isFramelessScreen ? "table-frame" : ""} ${screen === "result" ? "result-frame" : ""}`}>
         {screen === "home" && (
           <section className="hero-screen lobby-home jackpot-home" style={{ "--landing-bg-desktop": `url("${landingBackground.src}")`, "--landing-bg-mobile": `url("${mobileLandingBackground.src}")` } as React.CSSProperties}>
@@ -4968,7 +5038,7 @@ export function JackpotApp() {
 
         {screen === "result" && (
           result ? (
-            <section className="result-screen" aria-label="Match Results">
+            <section className={`result-screen ${isRoundLoss ? "result-loss" : "result-win"}`} aria-label="Match Results">
               {resultHype.confetti > 0 ? (
                 <div className={`confetti-burst ${resultMatchOver ? "confetti-grand" : ""}`} aria-hidden="true">
                   {Array.from({ length: resultHype.confetti }, (_, index) => (
@@ -5032,14 +5102,18 @@ export function JackpotApp() {
               <div className="result-screen-inner">
                 {/* Hero Outcome Section */}
                 <div className={`result-hero-section hype-${resultHype.mode}`}>
-                  <div className={`result-emblem-badge ${result.valid || resultMatchOver ? "emblem-gold" : "emblem-ruby"}`}>
-                    {result.valid || resultMatchOver ? <ResultTrophyIcon /> : <ResultAlertIcon />}
+                  <div className={`result-emblem-badge ${isRoundLoss ? "emblem-ruby" : (result.valid || resultMatchOver ? "emblem-gold" : "emblem-ruby")}`}>
+                    {isRoundLoss ? <ResultDefeatIcon size={28} /> : (result.valid || resultMatchOver ? <ResultTrophyIcon /> : <ResultAlertIcon />)}
                   </div>
 
                   <div className="result-tag-cluster">
-                    <span className={`result-status-pill ${result.valid || resultMatchOver ? "status-win" : "status-miss"}`}>
-                      <ResultSparkleIcon />
-                      <span>{resultMatchOver ? "MATCH OVER" : result.valid ? "JACKPOT SCORED" : "FALSE CALL / BLUFF BUSTED"}</span>
+                    <span className={`result-status-pill ${isRoundLoss ? "status-miss status-loss" : (result.valid || resultMatchOver ? "status-win" : "status-miss")}`}>
+                      {isRoundLoss ? <ResultDefeatIcon size={13} /> : <ResultSparkleIcon />}
+                      <span>
+                        {isRoundLoss
+                          ? (resultMatchOver ? "MATCH DEFEAT" : "LOST THIS ROUND")
+                          : (resultMatchOver ? "MATCH OVER" : result.valid ? "JACKPOT SCORED" : "FALSE CALL / BLUFF BUSTED")}
+                      </span>
                     </span>
                   </div>
 
@@ -5052,7 +5126,11 @@ export function JackpotApp() {
                   ) : null}
 
                   <div className="result-narrative">
-                    <h2 className="result-headline">{result.title}</h2>
+                    <h2 className={`result-headline ${isRoundLoss ? "headline-loss" : ""}`}>
+                      {isRoundLoss
+                        ? (resultMatchOver ? "MATCH DEFEATED" : "LOST THIS ROUND")
+                        : result.title}
+                    </h2>
                     <p className="result-description">{result.detail}</p>
                   </div>
                 </div>
@@ -5079,6 +5157,7 @@ export function JackpotApp() {
                               {team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
                                 ? offlineTeamName
                                 : team}
+                              {team === viewerTeam ? " (Your Team)" : ""}
                             </span>
                             <span className="team-track-score-badge">{count}/7</span>
                           </div>
@@ -5122,11 +5201,13 @@ export function JackpotApp() {
                         }
                       }}
                     >
-                      <ResultSparkleIcon />
+                      {isRoundLoss ? <ResultDefeatIcon size={18} /> : <ResultSparkleIcon />}
                       <span>
                         {(matchWonTeam || scores.Alpha >= WINNING_SCORE || scores.Bravo >= WINNING_SCORE)
                           ? "RUN IT BACK (NEW MATCH)"
-                          : `START NEXT ROUND (ROUND ${round + 1})`}
+                          : isRoundLoss
+                            ? `RELOAD · START ROUND ${round + 1}`
+                            : `START NEXT ROUND (ROUND ${round + 1})`}
                       </span>
                       <ResultArrowRightIcon />
                     </button>
@@ -5154,7 +5235,7 @@ export function JackpotApp() {
               </div>
             </section>
           ) : (
-            <section className="result-screen result-fallback-screen" aria-label="Round Summary">
+            <section className={`result-screen ${isRoundLoss ? "result-loss" : "result-win"} result-fallback-screen`} aria-label="Round Summary">
               <header className="result-minimal-topbar">
                 <button
                   type="button"
@@ -5184,15 +5265,21 @@ export function JackpotApp() {
 
               <div className="result-screen-inner">
                 <div className="result-hero-section">
-                  <div className="result-emblem-badge emblem-gold">
-                    <ResultTrophyIcon />
+                  <div className={`result-emblem-badge ${isRoundLoss ? "emblem-ruby" : "emblem-gold"}`}>
+                    {isRoundLoss ? <ResultDefeatIcon size={28} /> : <ResultTrophyIcon />}
                   </div>
                   <div className="result-narrative">
-                    <h2 className="result-headline">Round Standings</h2>
+                    <h2 className={`result-headline ${isRoundLoss ? "headline-loss" : ""}`}>
+                      {isRoundLoss ? "Round Standings · Round Lost" : "Round Standings"}
+                    </h2>
                     <p className="result-description">
                       {roomCode === "practice" || localMatchRef.current
-                        ? "Ready to deal the next round with your AI partner!"
-                        : "Round concluded. Ready to continue match."}
+                        ? isRoundLoss
+                          ? "Opponent took the round. Ready to bounce back next round!"
+                          : "Ready to deal the next round with your AI partner!"
+                        : isRoundLoss
+                          ? "Round concluded with opponent scoring. Ready to continue match."
+                          : "Round concluded. Ready to continue match."}
                     </p>
                   </div>
                 </div>
@@ -5216,6 +5303,7 @@ export function JackpotApp() {
                               {team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
                                 ? offlineTeamName
                                 : team}
+                              {team === viewerTeam ? " (Your Team)" : ""}
                             </span>
                             <span className="team-track-score-badge">{count}/7</span>
                           </div>
@@ -5251,8 +5339,14 @@ export function JackpotApp() {
                       }
                     }}
                   >
-                    <ResultSparkleIcon />
-                    <span>{roomCode === "practice" || localMatchRef.current ? `START ROUND ${round + 1}` : "RETURN TO TABLE"}</span>
+                    {isRoundLoss ? <ResultDefeatIcon size={18} /> : <ResultSparkleIcon />}
+                    <span>
+                      {roomCode === "practice" || localMatchRef.current
+                        ? isRoundLoss
+                          ? `RELOAD · START ROUND ${round + 1}`
+                          : `START ROUND ${round + 1}`
+                        : "RETURN TO TABLE"}
+                    </span>
                     <ResultArrowRightIcon />
                   </button>
                   <div className="result-secondary-row">
@@ -5869,6 +5963,16 @@ function ResultAlertIcon() {
       <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
       <line x1="12" y1="9" x2="12" y2="13" />
       <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  );
+}
+
+function ResultDefeatIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="15" y1="9" x2="9" y2="15" />
+      <line x1="9" y1="9" x2="15" y2="15" />
     </svg>
   );
 }
