@@ -385,7 +385,7 @@ export function JackpotApp() {
     if (typeof window !== "undefined") {
       try {
         const saved = localStorage.getItem("jackpot_offline_team_name");
-        if (saved && saved.trim()) return saved.trim().slice(0, 18);
+        if (saved && saved.trim()) return saved.trim().slice(0, 10);
       } catch {}
     }
     return "Alpha";
@@ -4145,9 +4145,6 @@ export function JackpotApp() {
                           >
                             <div className="signal-card-top">
                               <span className="signal-card-symbol">{signal.symbol}</span>
-                              <span className={`stealth-micro-tag ${signal.stealthLevel.toLowerCase()}`}>
-                                {signal.stealthLevel}
-                              </span>
                             </div>
                             <strong className="signal-card-name">{signal.label}</strong>
                             {isSelected && <span className="selected-check-badge">✓ Selected</span>}
@@ -5150,14 +5147,16 @@ export function JackpotApp() {
                     {scoreTeams.map((team) => {
                       const count = Math.min(7, Math.max(0, scores[team] ?? 0));
                       const isLeader = count === Math.max(...scoreTeams.map((t) => scores[t] ?? 0));
+                      const isMyTeam = team === viewerTeam;
+                      const rawName = team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
+                        ? offlineTeamName
+                        : team;
+                      const displayName = rawName.slice(0, 10);
                       return (
-                        <div key={team} className={`result-team-track ${isLeader && count > 0 ? "leader-track" : ""}`}>
+                        <div key={team} className={`result-team-track ${isLeader && count > 0 ? "leader-track" : ""} ${isMyTeam ? "my-team-track" : ""}`}>
                           <div className="team-track-info">
-                            <span className="team-track-name">
-                              {team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
-                                ? offlineTeamName
-                                : team}
-                              {team === viewerTeam ? " (Your Team)" : ""}
+                            <span className="team-track-name" title={rawName}>
+                              {displayName}
                             </span>
                             <span className="team-track-score-badge">{count}/7</span>
                           </div>
@@ -5296,14 +5295,16 @@ export function JackpotApp() {
                     {scoreTeams.map((team) => {
                       const count = Math.min(7, Math.max(0, scores[team] ?? 0));
                       const isLeader = count === Math.max(...scoreTeams.map((t) => scores[t] ?? 0));
+                      const isMyTeam = team === viewerTeam;
+                      const rawName = team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
+                        ? offlineTeamName
+                        : team;
+                      const displayName = rawName.slice(0, 10);
                       return (
-                        <div key={team} className={`result-team-track ${isLeader && count > 0 ? "leader-track" : ""}`}>
+                        <div key={team} className={`result-team-track ${isLeader && count > 0 ? "leader-track" : ""} ${isMyTeam ? "my-team-track" : ""}`}>
                           <div className="team-track-info">
-                            <span className="team-track-name">
-                              {team === "Alpha" && (roomCode === "practice" || localMatchRef.current)
-                                ? offlineTeamName
-                                : team}
-                              {team === viewerTeam ? " (Your Team)" : ""}
+                            <span className="team-track-name" title={rawName}>
+                              {displayName}
                             </span>
                             <span className="team-track-score-badge">{count}/7</span>
                           </div>

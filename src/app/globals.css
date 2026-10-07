@@ -4826,12 +4826,14 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: clamp(6px, 1.4vw, 10px);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
-  padding: clamp(5px, 0.9vh, 8px) clamp(8px, 1.8vw, 12px);
+  padding: clamp(5px, 0.9vh, 8px) clamp(6px, 1.6vw, 10px);
   transition: border-color 0.2s, background 0.2s;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .result-team-track.leader-track {
@@ -4839,28 +4841,67 @@ button {
   border-color: rgba(245, 197, 66, 0.3);
 }
 
+/* Subtle differentiated highlight for the player's team container */
+.result-team-track.my-team-track {
+  background: rgba(245, 197, 66, 0.11);
+  border-color: rgba(245, 197, 66, 0.38);
+  box-shadow: inset 0 0 16px rgba(245, 197, 66, 0.05), 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.result-team-track.my-team-track .team-track-name {
+  color: #fef08a;
+}
+
+.result-team-track.my-team-track .team-track-score-badge {
+  background: rgba(245, 197, 66, 0.22);
+  border: 1px solid rgba(245, 197, 66, 0.42);
+  color: #fef08a;
+}
+
+.result-screen.result-loss .result-team-track.my-team-track {
+  background: rgba(239, 68, 68, 0.13);
+  border-color: rgba(239, 68, 68, 0.4);
+  box-shadow: inset 0 0 16px rgba(239, 68, 68, 0.06), 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.result-screen.result-loss .result-team-track.my-team-track .team-track-name {
+  color: #fca5a5;
+}
+
+.result-screen.result-loss .result-team-track.my-team-track .team-track-score-badge {
+  background: rgba(239, 68, 68, 0.22);
+  border: 1px solid rgba(239, 68, 68, 0.42);
+  color: #fca5a5;
+}
+
 .team-track-info {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-width: 75px;
-  flex-shrink: 0;
+  gap: clamp(4px, 1vw, 6px);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .team-track-name {
   font-weight: 800;
-  font-size: 0.85rem;
+  font-size: clamp(0.78rem, 1.4vh, 0.85rem);
   color: #fff;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: clamp(75px, 22vw, 110px);
 }
 
 .team-track-score-badge {
-  font-size: 0.7rem;
+  font-size: clamp(0.65rem, 1.2vh, 0.7rem);
   font-weight: 800;
-  padding: 2px 6px;
+  padding: 2px 5px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.85);
+  flex-shrink: 0;
 }
 
 .leader-track .team-track-score-badge {
@@ -4871,21 +4912,23 @@ button {
 .team-track-letters {
   display: flex;
   align-items: center;
-  gap: clamp(4px, 1vw, 7px);
+  gap: clamp(2px, 0.8vw, 6px);
   flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .result-letter-token {
-  width: clamp(24px, 5.2vw, 34px);
-  height: clamp(28px, 6.2vw, 38px);
+  width: clamp(20px, 4.6vw, 32px);
+  height: clamp(24px, 5.6vw, 36px);
   display: grid;
   place-items: center;
-  font-size: clamp(0.78rem, 1.8vh, 0.95rem);
+  font-size: clamp(0.72rem, 1.6vh, 0.92rem);
   font-weight: 900;
   font-family: var(--font-game), system-ui, sans-serif;
   border-radius: 6px;
   user-select: none;
   transition: all 0.25s ease;
+  flex-shrink: 0;
 }
 
 .result-letter-token.active-letter {
@@ -5015,11 +5058,33 @@ button {
   .desktop-only-inline {
     display: none;
   }
+  .result-race-board {
+    padding: 8px 6px;
+  }
   .result-team-track {
-    padding: 6px 8px;
+    padding: 5px 6px;
+    gap: 4px;
+  }
+  .team-track-info {
+    gap: 4px;
+    min-width: 0;
   }
   .team-track-name {
-    font-size: 0.78rem;
+    font-size: 0.75rem;
+    max-width: 76px;
+  }
+  .team-track-score-badge {
+    font-size: 0.65rem;
+    padding: 1px 4px;
+  }
+  .team-track-letters {
+    gap: 2px;
+  }
+  .result-letter-token {
+    width: 20px;
+    height: 24px;
+    font-size: 0.7rem;
+    border-radius: 4px;
   }
 }
 
@@ -6743,7 +6808,7 @@ button {
 .signal-card-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
 }
 
 .signal-card-symbol {

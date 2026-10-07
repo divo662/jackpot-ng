@@ -67,7 +67,7 @@ export function SettingsPageContent({
   };
 
   const handleSaveTeamName = () => {
-    const clean = teamNameDraft.trim().slice(0, 18) || "Alpha";
+    const clean = teamNameDraft.trim().slice(0, 10) || "Alpha";
     setOfflineTeamName(clean);
     setTeamNameDraft(clean);
     try {
@@ -207,16 +207,16 @@ export function SettingsPageContent({
           <div className="team-config-row">
             <div className="team-name-input-group">
               <label htmlFor="offline-team-name-input" className="team-input-label">
-                YOUR TEAM NAME (OFFLINE PLAY)
+                YOUR TEAM NAME (MAX 10 CHARACTERS)
               </label>
               <div className="team-input-with-button">
                 <input
                   id="offline-team-name-input"
                   type="text"
-                  maxLength={18}
+                  maxLength={10}
                   value={teamNameDraft}
-                  onChange={(e) => setTeamNameDraft(e.target.value)}
-                  placeholder="e.g. Royal Flush, Alpha, Fire"
+                  onChange={(e) => setTeamNameDraft(e.target.value.slice(0, 10))}
+                  placeholder="e.g. Alpha, Fire (max 10)"
                   className="team-name-input"
                 />
                 <button
