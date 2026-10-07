@@ -232,6 +232,30 @@
       "created_at": "2026-10-07T04:27:14.846Z",
       "sender": "ios",
       "is_cancelled": false
+    },
+    {
+      "id": "cb535c81-e9f4-47ab-af53-4029a37b9641",
+      "role": "agent",
+      "content": "The fixed offline container at the top has been replaced with an auto-dismissing toast notification system for both offline and online states:\n\n### What Changed:\n1. **Removed Permanent Fixed Banner**:\n   - The top banner in [`ServiceWorkerRegistration.tsx`](https://github.com/divo662/jackpot-ng/blob/main/src/components/ServiceWorkerRegistration.tsx) no longer stays permanently pinned to the screen while offline.\n\n2. **Auto-Dismissing Offline Toast (\"comes and goes off\")**:\n   - When connection drops (or if launched while offline), a sleek toast slides in at the top:\n     - **⚡ You're Offline** — *AI matches playable without connection*\n   - It displays for ~4.5 seconds and then smoothly animates out and disappears.\n   - An immediate close button (`×`) is also provided if you wish to dismiss it right away.\n\n3. **\"Back Online\" Toast**:\n   - When your device reconnects to the internet, a green connection toast slides in:\n     - **✓ Back Online** — *Internet connection restored*\n   - It displays for ~3.5 seconds before smoothly animating out and dismissing itself.\n   - It only triggers after having actually been offline, preventing redundant toasts on standard cold page loads.\n\n4. **Styling & Animations**:\n   - Added `.connectivity-toast-container`, `.connectivity-toast-offline`, and `.connectivity-toast-online` with entry (`connectivityToastIn`) and exit (`connectivityToastOut`) animations in [`globals.css`](https://github.com/divo662/jackpot-ng/blob/main/src/app/globals.css#L9609-L9744), respecting mobile notch safe-area insets.",
+      "status": "completed",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": "0b3fe642-fa72-4a43-b7a9-6b0baca56e12",
+      "created_at": "2026-10-07T04:33:46.956Z",
+      "sender": "macOS",
+      "is_cancelled": false
+    },
+    {
+      "id": "903112dd-981d-4f60-b234-4833e4a630c6",
+      "role": "user",
+      "content": "I attached an image: images/photo-1791348048-1.jpg.\n\nOkay in the signal room and signal modal after a round I want to make it a carousel remove all description text please make it a horizontal animated carousel on just mobile view but om desktop it’s okay. Also I noticed a bug while playing after a round I chose adjust glasses as signal then my partner had 4 cards and flashed the issue is I don’t know if he flashed a fake signal or real one but will he dumb to flash a fake signal when you have a set anyways when he flashed the signal I saw was scratch nose so I didn’t want to jackpot but opponent suspended him and caught him that’s very weird what happened??? Also I’m the result page I like interactive i lov ginger you can see it was a fight to the last round so I like text like if I’m the 12 round like the finale battle or so you understand right all those kind of confetti with different text. Also when it’s the final round it’s over they’re should be a different message like match up is over the winner is- you understand",
+      "status": "pending",
+      "model": "claude-sonnet-5-5-medium",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-07T04:45:04.189Z",
+      "sender": "ios",
+      "is_cancelled": false
     }
   ]
 }

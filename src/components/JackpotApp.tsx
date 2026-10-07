@@ -79,6 +79,87 @@ const signalLibrary = GAME_SIGNALS;
 export const JACKPOT_LETTERS = ["J", "A", "C", "K", "P", "O", "T"] as const;
 export const WINNING_SCORE = JACKPOT_LETTERS.length;
 
+type ResultHype = {
+  mode: "match-over" | "finale" | "match-point" | "neck-and-neck" | "rolling";
+  tag: string;
+  headline: string | null;
+  subline: string;
+  bursts: string[];
+  confetti: number;
+};
+
+/** Builds the dramatic callouts shown on the result screen based on how the match is going. */
+function getResultHype(args: {
+  round: number;
+  alpha: number;
+  bravo: number;
+  alphaName: string;
+  bravoName: string;
+  roundValid: boolean;
+}): ResultHype {
+  const { round, alpha, bravo, alphaName, bravoName, roundValid } = args;
+  const top = Math.max(alpha, bravo);
+  const low = Math.min(alpha, bravo);
+  const gap = top - low;
+  if (top >= WINNING_SCORE) {
+    const winner = alpha >= WINNING_SCORE ? alphaName : bravoName;
+    const loserScore = low;
+    const photo = loserScore >= WINNING_SCORE - 1;
+    return {
+      mode: "match-over",
+      tag: "MATCH OVER",
+      headline: `${winner.toUpperCase()} WINS THE MATCH!`,
+      subline: photo
+        ? `The match is over. ${winner} took it by a single letter in a fight to the very last round!`
+        : `The match is over. The winner is ${winner}, ${top}–${loserScore}!`,
+      bursts: photo
+        ? ["WHAT A FIGHT!", "PHOTO FINISH!", "LEGENDARY!"]
+        : ["CHAMPIONS!", "GAME OVER!", "GG!"],
+      confetti: 90,
+    };
+  }
+  if (round >= 12) {
+    return {
+      mode: "finale",
+      tag: `ROUND ${round} · FINALE BATTLE`,
+      headline: "THE FINALE BATTLE",
+      subline: "This is the longest fight of the night. Every letter counts now!",
+      bursts: ["FINALE!", "NO MERCY!", "ALL OR NOTHING!"],
+      confetti: roundValid ? 60 : 30,
+    };
+  }
+  if (top === WINNING_SCORE - 1) {
+    const leader = alpha === top && bravo !== top ? alphaName : bravo === top && alpha !== top ? bravoName : null;
+    return {
+      mode: "match-point",
+      tag: "MATCH POINT",
+      headline: leader ? `${leader.toUpperCase()} IS ONE LETTER AWAY!` : "BOTH TEAMS ARE ONE LETTER AWAY!",
+      subline: "The next JACKPOT ends the match.",
+      bursts: ["MATCH POINT!", "ONE MORE!", "TENSION!"],
+      confetti: roundValid ? 45 : 20,
+    };
+  }
+  if (top >= 4 && gap <= 1) {
+    return {
+      mode: "neck-and-neck",
+      tag: "NECK AND NECK",
+      headline: "NECK AND NECK!",
+      subline: "Nothing separates these two teams.",
+      bursts: ["ON FIRE!", "TOO CLOSE!", "WHO BLINKS?"],
+      confetti: roundValid ? 40 : 16,
+    };
+  }
+  return {
+    mode: "rolling",
+    tag: "",
+    headline: null,
+    subline: "",
+    bursts: roundValid ? ["NICE!", "JACKPOT!"] : ["BUSTED!"],
+    confetti: roundValid ? 36 : 0,
+  };
+}
+
+
 const quickReactions = [
   { id: "laugh", symbol: "😂", label: "Laugh" },
   { id: "cry", symbol: "😭", label: "Cry" },
@@ -873,6 +954,15 @@ export function JackpotApp() {
     return signalLibrary.filter((s) => s.category === signalCategoryFilter);
   }, [signalCategoryFilter]);
   const scoreTeams: Team[] = ["Alpha", "Bravo"];
+  const resultHype = getResultHype({
+    round,
+    alpha: scores.Alpha || 0,
+    bravo: scores.Bravo || 0,
+    alphaName: roomCode === "practice" || localMatchRef.current ? offlineTeamName : "Alpha",
+    bravoName: "Bravo",
+    roundValid: Boolean(result?.valid),
+  });
+  const resultMatchOver = resultHype.mode === "match-over";
   const activePlayer = game?.players.find((player) => player.id === game.activePlayerId);
   const activePlayerIndex = game?.players.findIndex((player) => player.id === game.activePlayerId) ?? -1;
   const passReceiver = game && activePlayerIndex >= 0 ? game.players[(activePlayerIndex + 1) % game.players.length] : null;
@@ -4814,17 +4904,31 @@ export function JackpotApp() {
         {screen === "result" && (
           result ? (
             <section className="result-screen" aria-label="Match Results">
-              {result.valid ? (
-                <div className="confetti-burst" aria-hidden="true">
-                  {Array.from({ length: 36 }, (_, index) => (
+              {resultHype.confetti > 0 ? (
+                <div className={`confetti-burst ${resultMatchOver ? "confetti-grand" : ""}`} aria-hidden="true">
+                  {Array.from({ length: resultHype.confetti }, (_, index) => (
                     <i
                       key={index}
                       style={{
-                        left: `${(index * 27) % 100}%`,
-                        animationDelay: `${(index % 10) * 0.08}s`,
-                        backgroundColor: ["#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#fef08a"][index % 5],
+                        left: `${(index * 27 + (index % 7) * 5) % 100}%`,
+                        animationDelay: `${(index % 14) * 0.09}s`,
+                        animationDuration: `${2.4 + (index % 6) * 0.35}s`,
+                        backgroundColor: ["#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#fef08a", "#ec4899"][index % 6],
                       }}
                     />
+                  ))}
+                </div>
+              ) : null}
+              {resultHype.mode !== "rolling" || result.valid ? (
+                <div className="result-text-bursts" aria-hidden="true">
+                  {resultHype.bursts.map((word, index) => (
+                    <span
+                      key={`${word}-${index}`}
+                      className={`result-text-burst burst-${index % 3}`}
+                      style={{ animationDelay: `${0.25 + index * 0.9}s` }}
+                    >
+                      {word}
+                    </span>
                   ))}
                 </div>
               ) : null}
@@ -4844,7 +4948,7 @@ export function JackpotApp() {
                 <div className="result-topbar-center">
                   <span className="result-topbar-badge">
                     <span className="result-badge-dot" />
-                    ROUND {round} RESOLVED
+                    {resultHype.tag ? resultHype.tag : `ROUND ${round} RESOLVED`}
                   </span>
                 </div>
 
@@ -4862,23 +4966,32 @@ export function JackpotApp() {
               {/* Main Balanced Board: Zero Scroll on Desktop and Mobile */}
               <div className="result-screen-inner">
                 {/* Hero Outcome Section */}
-                <div className="result-hero-section">
-                  <div className={`result-emblem-badge ${result.valid ? "emblem-gold" : "emblem-ruby"}`}>
-                    {result.valid ? <ResultTrophyIcon /> : <ResultAlertIcon />}
+                <div className={`result-hero-section hype-${resultHype.mode}`}>
+                  <div className={`result-emblem-badge ${result.valid || resultMatchOver ? "emblem-gold" : "emblem-ruby"}`}>
+                    {result.valid || resultMatchOver ? <ResultTrophyIcon /> : <ResultAlertIcon />}
                   </div>
 
                   <div className="result-tag-cluster">
-                    <span className={`result-status-pill ${result.valid ? "status-win" : "status-miss"}`}>
+                    <span className={`result-status-pill ${result.valid || resultMatchOver ? "status-win" : "status-miss"}`}>
                       <ResultSparkleIcon />
-                      <span>{result.valid ? "JACKPOT SCORED" : "FALSE CALL / BLUFF BUSTED"}</span>
+                      <span>{resultMatchOver ? "MATCH OVER" : result.valid ? "JACKPOT SCORED" : "FALSE CALL / BLUFF BUSTED"}</span>
                     </span>
                   </div>
+
+                  {resultHype.headline ? (
+                    <div className="result-hype-banner" key={resultHype.mode}>
+                      <span className="result-hype-tag">{resultHype.tag}</span>
+                      <h1 className="result-hype-headline">{resultHype.headline}</h1>
+                      <p className="result-hype-subline">{resultHype.subline}</p>
+                    </div>
+                  ) : null}
 
                   <div className="result-narrative">
                     <h2 className="result-headline">{result.title}</h2>
                     <p className="result-description">{result.detail}</p>
                   </div>
                 </div>
+
 
                 {/* Match Race Standings: 7 Letter Tracker */}
                 <div className="result-race-board">

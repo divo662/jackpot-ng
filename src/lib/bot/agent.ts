@@ -387,10 +387,9 @@ export class BotAgent {
 
     if (!shouldSignal) return null;
 
-    // Decide whether to flash a decoy first to misdirect opponents
-    const useDecoyFirst =
-      this.memory.signalCount === 0 && this.rng.chance(this.profile.decoyBeforeSignal);
-
+    // A bot holding four-of-a-kind ALWAYS flashes the real team signal. Flashing a
+    // decoy here would burn the signal attempt, leave the partner waiting, and
+    // expose the holder to a suspect call with nothing to show for it.
     const delay = this.rng.range(
       this.profile.signalDelayMs[0],
       this.profile.signalDelayMs[1]
@@ -398,20 +397,6 @@ export class BotAgent {
     const executeAt = now + delay;
     this.memory.lastSignalAt = executeAt;
     this.memory.signalCount += 1;
-
-    if (useDecoyFirst) {
-      const decoys = ALL_SIGNAL_IDS.filter((id) => id !== obs.teamSignalId);
-      const decoyId = this.rng.pick(decoys);
-      this.memory.plannedAction = {
-        action: { type: "fake-signal", playerId: this.playerId, signalId: decoyId },
-        executeAt,
-      };
-      return {
-        action: null,
-        executeAt,
-        debugReason: `bluff decoy before real signal scheduled in ${Math.round(delay)}ms`,
-      };
-    }
 
     this.memory.plannedAction = {
       action: { type: "signal", playerId: this.playerId },
