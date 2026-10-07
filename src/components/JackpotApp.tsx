@@ -4050,7 +4050,6 @@ export function JackpotApp() {
                               </span>
                             </div>
                             <strong className="signal-card-name">{signal.label}</strong>
-                            <span className="signal-card-sub">{signal.description}</span>
                             {isSelected && <span className="selected-check-badge">✓ Selected</span>}
                           </button>
                         );
@@ -5258,7 +5257,6 @@ export function JackpotApp() {
                           >
                             <span className="choice-icon">{signal.symbol}</span>
                             <strong className="choice-label">{signal.label}</strong>
-                            <span className="choice-desc">{signal.description}</span>
                           </button>
                         );
                       })}

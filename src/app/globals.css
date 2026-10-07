@@ -4532,6 +4532,160 @@ button {
   color: rgba(255, 255, 255, 0.85);
 }
 
+/* Result Interactive Hype Banner & Floating Text Bursts */
+.result-hype-banner {
+  margin: 6px auto;
+  padding: 10px 18px;
+  background: radial-gradient(ellipse at center, rgba(245, 158, 11, 0.22) 0%, rgba(20, 10, 4, 0.65) 100%);
+  border: 1.5px solid rgba(245, 158, 11, 0.55);
+  border-radius: 14px;
+  box-shadow: 0 0 24px rgba(245, 158, 11, 0.35), inset 0 1px 3px rgba(255, 255, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-width: 520px;
+  width: 95%;
+  animation: hypeBannerPop 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.hype-match-over .result-hype-banner {
+  background: radial-gradient(ellipse at center, rgba(34, 197, 94, 0.28) 0%, rgba(10, 24, 12, 0.75) 100%);
+  border-color: rgba(34, 197, 94, 0.7);
+  box-shadow: 0 0 32px rgba(34, 197, 94, 0.45), inset 0 1px 4px rgba(255, 255, 255, 0.3);
+}
+
+.hype-finale .result-hype-banner {
+  background: radial-gradient(ellipse at center, rgba(239, 68, 68, 0.25) 0%, rgba(245, 158, 11, 0.2) 50%, rgba(20, 8, 4, 0.75) 100%);
+  border-color: rgba(245, 158, 11, 0.7);
+  box-shadow: 0 0 30px rgba(239, 68, 68, 0.35), 0 0 15px rgba(245, 158, 11, 0.3);
+}
+
+.result-hype-tag {
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+
+.hype-match-over .result-hype-tag {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.result-hype-headline {
+  margin: 0;
+  font-family: var(--font-game), system-ui, sans-serif;
+  font-size: clamp(1.4rem, 3.2vh, 2.1rem);
+  letter-spacing: 0.05em;
+  color: #fff;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9), 0 0 18px rgba(245, 158, 11, 0.6);
+  line-height: 1.15;
+}
+
+.hype-match-over .result-hype-headline {
+  color: #fef08a;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9), 0 0 22px rgba(34, 197, 94, 0.75);
+}
+
+.result-hype-subline {
+  margin: 0;
+  font-size: clamp(0.78rem, 1.4vh, 0.88rem);
+  color: rgba(255, 255, 255, 0.92);
+  line-height: 1.35;
+  text-align: center;
+}
+
+/* Floating celebratory text bursts across the screen */
+.result-text-bursts {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 25;
+  overflow: hidden;
+}
+
+.result-text-burst {
+  position: absolute;
+  font-family: var(--font-game), system-ui, sans-serif;
+  font-size: clamp(1.2rem, 3vw, 1.9rem);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 6px 14px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  animation: burstFloat 2.6s ease-out forwards;
+}
+
+.result-text-burst.burst-0 {
+  top: 18%;
+  left: 8%;
+  color: #fef08a;
+  background: rgba(245, 158, 11, 0.35);
+  border: 1.5px solid rgba(245, 158, 11, 0.7);
+  transform: rotate(-8deg);
+}
+
+.result-text-burst.burst-1 {
+  top: 24%;
+  right: 8%;
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.35);
+  border: 1.5px solid rgba(34, 197, 94, 0.7);
+  transform: rotate(7deg);
+}
+
+.result-text-burst.burst-2 {
+  top: 36%;
+  left: 14%;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.35);
+  border: 1.5px solid rgba(239, 68, 68, 0.7);
+  transform: rotate(-4deg);
+}
+
+@keyframes burstFloat {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.85);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(0) scale(1.05);
+  }
+  75% {
+    opacity: 0.95;
+    transform: translateY(-16px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-36px) scale(0.95);
+  }
+}
+
+@keyframes hypeBannerPop {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.confetti-grand i {
+  width: 10px !important;
+  height: 16px !important;
+}
+
 /* Match Race Tracker: J-A-C-K-P-O-T Progress */
 .result-race-board {
   width: 100%;
@@ -6992,48 +7146,125 @@ button {
   }
 
   .secret-signals-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    height: auto;
-    max-height: 52vh;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-    padding: 2px;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(245, 158, 11, 0.4) transparent;
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scroll-snap-type: x mandatory !important;
+    -webkit-overflow-scrolling: touch !important;
+    gap: 10px !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 8px 12px 14px 4px !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(245, 158, 11, 0.45) transparent !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
   }
 
   .secret-signal-card {
-    padding: 8px 10px;
-    min-height: 82px;
-    border-radius: 8px;
+    flex: 0 0 138px !important;
+    width: 138px !important;
+    min-width: 138px !important;
+    min-height: 86px !important;
+    scroll-snap-align: start !important;
+    padding: 10px 8px !important;
+    border-radius: 12px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    gap: 4px !important;
+    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s ease, border-color 0.22s ease !important;
+    animation: carouselCardPop 0.35s ease-out backwards !important;
+  }
+
+  .secret-signal-card:active {
+    transform: scale(0.96) !important;
+  }
+
+  .secret-signal-card.selected {
+    transform: scale(1.03) !important;
+    box-shadow: 0 0 18px rgba(245, 158, 11, 0.5), inset 0 0 10px rgba(245, 158, 11, 0.2) !important;
+    border-color: #f59e0b !important;
   }
 
   .signal-card-symbol {
-    font-size: 1.3rem;
+    font-size: 1.45rem !important;
   }
 
   .signal-card-name {
-    font-size: 0.92rem;
-  }
-
-  .signal-card-sub {
-    font-size: 0.68rem;
-    line-height: 1.22;
+    font-size: 0.88rem !important;
+    text-align: center !important;
   }
 
   .confirm-signal-btn {
     height: 48px;
     font-size: 1.05rem;
   }
+
+  /* Round Signal Switch Modal Horizontal Carousel on Mobile */
+  .round-signals-grid {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scroll-snap-type: x mandatory !important;
+    -webkit-overflow-scrolling: touch !important;
+    gap: 10px !important;
+    max-height: none !important;
+    padding: 6px 10px 14px 2px !important;
+    margin-bottom: 14px !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(245, 158, 11, 0.45) transparent !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  .round-signal-choice-card {
+    flex: 0 0 120px !important;
+    width: 120px !important;
+    min-width: 120px !important;
+    min-height: 84px !important;
+    scroll-snap-align: start !important;
+    padding: 10px 6px !important;
+    border-radius: 12px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    gap: 4px !important;
+    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s ease, border-color 0.22s ease !important;
+    animation: carouselCardPop 0.35s ease-out backwards !important;
+  }
+
+  .round-signal-choice-card:active {
+    transform: scale(0.96) !important;
+  }
+
+  .round-signal-choice-card.selected {
+    transform: scale(1.03) !important;
+    box-shadow: 0 0 18px rgba(245, 158, 11, 0.5), inset 0 0 10px rgba(245, 158, 11, 0.2) !important;
+    border-color: #f59e0b !important;
+  }
+}
+
+@keyframes carouselCardPop {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @media (max-width: 400px) {
-  .secret-signals-grid {
-    grid-template-columns: 1fr;
-    max-height: 50vh;
-  }
-
   .confirm-signal-btn {
     height: 46px;
     font-size: 1rem;
