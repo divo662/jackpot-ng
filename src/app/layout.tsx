@@ -76,19 +76,11 @@ export const metadata: Metadata = {
     type: "website",
     images: [
       {
-        url: `${baseUrl}/og-image.png`,
-        secureUrl: `${baseUrl}/og-image.png`,
-        width: 1200,
-        height: 630,
-        alt: "Jackpot - The Multiplayer Secret Signal & Card Bluffing Party Game",
-        type: "image/png",
-      },
-      {
-        url: `${baseUrl}/og-image-square.png`,
-        secureUrl: `${baseUrl}/og-image-square.png`,
-        width: 600,
-        height: 600,
-        alt: "Jackpot Card Game",
+        url: `${baseUrl}/images/733E6493-CD8B-4674-959E-365DF9B16AA7.png`,
+        secureUrl: `${baseUrl}/images/733E6493-CD8B-4674-959E-365DF9B16AA7.png`,
+        width: 1672,
+        height: 941,
+        alt: "Jackpot - The Social Card Bluffing Party Game",
         type: "image/png",
       },
     ],
@@ -98,7 +90,7 @@ export const metadata: Metadata = {
     title: "Jackpot | Social Card Bluffing & Secret Signal Party Game",
     description:
       "Play Jackpot online with friends! Team up, swap cards, transmit secret signals across the table, suspect rivals, and shout JACKPOT!",
-    images: [`${baseUrl}/twitter-image.png`],
+    images: [`${baseUrl}/images/733E6493-CD8B-4674-959E-365DF9B16AA7.png`],
   },
   icons: {
     icon: [
@@ -139,8 +131,8 @@ const jsonLd = {
   url: baseUrl,
   description:
     "Fast-paced multiplayer card passing and social deduction party game. Transmit secret signals across the table, suspect rivals, and race to spell JACKPOT.",
-  image: `${baseUrl}/og-image.png`,
-  screenshot: `${baseUrl}/og-image.png`,
+  image: `${baseUrl}/images/733E6493-CD8B-4674-959E-365DF9B16AA7.png`,
+  screenshot: `${baseUrl}/images/733E6493-CD8B-4674-959E-365DF9B16AA7.png`,
   applicationCategory: "GameApplication",
   genre: ["Card Game", "Party Game", "Social Deduction"],
   operatingSystem: "All",
@@ -156,6 +148,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" className={`${fontSans.variable} ${lilitaOne.variable} h-full antialiased`}>
       <head>
+        <link
+          rel="image_src"
+          href={`${baseUrl}/images/733E6493-CD8B-4674-959E-365DF9B16AA7.png`}
+        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}

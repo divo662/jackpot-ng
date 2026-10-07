@@ -328,6 +328,30 @@
       "created_at": "2026-10-07T05:25:37.130Z",
       "sender": "ios",
       "is_cancelled": false
+    },
+    {
+      "id": "6a938c46-8aac-4542-ab4c-3ec696053fa9",
+      "role": "user",
+      "content": "Okay for me index.html when I share link on X WhatsApp IG Facebook and other platforms I want you to use this as the image to show please images/733E6493-CD8B-4674-959E-365DF9B16AA7.png",
+      "status": "cancelled",
+      "model": "gemini-3.8-flash-high",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-07T06:33:07.525Z",
+      "sender": "ios",
+      "is_cancelled": true
+    },
+    {
+      "id": "ef4a5e1f-0922-4928-99fb-f746f71042c8",
+      "role": "user",
+      "content": "Okay for me index.html when I share link on X WhatsApp IG Facebook and other platforms I want you to use this as the image to show please images/733E6493-CD8B-4674-959E-365DF9B16AA7.png",
+      "status": "pending",
+      "model": "gemini-3.8-flash-high",
+      "client_type": "gemini-bridge",
+      "parent_message_id": null,
+      "created_at": "2026-10-07T06:33:43.928Z",
+      "sender": "ios",
+      "is_cancelled": false
     }
   ]
 }
