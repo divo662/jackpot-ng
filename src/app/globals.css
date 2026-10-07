@@ -7459,6 +7459,17 @@ button {
   color: #ffffff;
 }
 
+.table-pause-toggle-btn {
+  background: rgba(45, 24, 12, 0.9);
+  border-color: rgba(245, 158, 11, 0.55);
+}
+
+.table-pause-toggle-btn:hover {
+  background: rgba(245, 158, 11, 0.3);
+  border-color: #fbbf24;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.35);
+}
+
 .table-lobby-btn {
   display: inline-flex;
   align-items: center;
@@ -9487,6 +9498,46 @@ button {
 .table-modal-btn.cancel-btn:hover {
   background: rgba(255, 255, 255, 0.16) !important;
   color: #ffffff !important;
+}
+
+.table-modal-btn.resume-btn {
+  flex: 1.35 !important;
+  background: linear-gradient(135deg, #10b981 0%, #047857 100%) !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  border: 1px solid rgba(167, 243, 208, 0.45) !important;
+  box-shadow: 0 4px 18px rgba(16, 185, 129, 0.4) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+}
+
+.table-modal-btn.resume-btn:hover {
+  background: linear-gradient(135deg, #34d399 0%, #059669 100%) !important;
+  box-shadow: 0 6px 24px rgba(16, 185, 129, 0.6) !important;
+}
+
+.table-modal-btn.resume-host-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  background: rgba(245, 158, 11, 0.2) !important;
+  border: 1px solid rgba(245, 158, 11, 0.5) !important;
+  color: #fef08a !important;
+  font-weight: 700 !important;
+  padding: 10px 20px !important;
+  border-radius: 8px !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.table-modal-btn.resume-host-btn:hover {
+  background: rgba(245, 158, 11, 0.35) !important;
+  border-color: #f59e0b !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.3) !important;
 }
 
 .btn-icon {

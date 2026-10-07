@@ -967,6 +967,9 @@ export function JackpotApp() {
   const activePlayerIndex = game?.players.findIndex((player) => player.id === game.activePlayerId) ?? -1;
   const passReceiver = game && activePlayerIndex >= 0 ? game.players[(activePlayerIndex + 1) % game.players.length] : null;
   const isYourPass = game?.activePlayerId === viewerPlayerId;
+  const isMatchPaused = matchInterruption?.type === "paused" ||
+    matchInterruption?.type === "disconnected" ||
+    (Boolean(localMatchRef.current || roomCode === "practice") && tableMenuOpen);
   const yourFour = you ? findFourOfAKind(you.hand) : null;
   const activeSignalBurst = signalBursts.length > 0 ? signalBursts[signalBursts.length - 1] : null;
   const prevYourFour = useRef<Suit | null>(null);
@@ -1976,7 +1979,7 @@ export function JackpotApp() {
   };
 
   const requestServerGameAction = async (
-    type: "pass" | "jackpot" | "suspect" | "signal" | "fake-signal" | "reaction" | "restart" | "next-round" | "rematch",
+    type: "pass" | "jackpot" | "suspect" | "signal" | "fake-signal" | "reaction" | "restart" | "next-round" | "rematch" | "pause" | "resume",
     cardId?: string,
     reactionId?: string,
     targetPlayerId?: string
@@ -2011,7 +2014,7 @@ export function JackpotApp() {
         setStatus(message);
         showTableToast("error", "Action failed", message);
       } else {
-        setStatus(payload.notice || (type === "pass" ? "Card passed." : type.includes("signal") ? "Signal flashed." : `${type.toUpperCase()} called.`));
+        setStatus(payload.notice || (type === "pass" ? "Card passed." : type === "pause" ? "Match paused." : type === "resume" ? "Match resumed." : type.includes("signal") ? "Signal flashed." : `${type.toUpperCase()} called.`));
         if (payload.room) {
           applySharedRoom(payload.room);
         }
@@ -2031,7 +2034,7 @@ export function JackpotApp() {
   };
 
   const onPassSelected = () => {
-    if (!game || !selectedCardId || !isYourPass) return;
+    if (!game || !selectedCardId || !isYourPass || isMatchPaused) return;
     if (isTutorialMatch && (tutorialStep === "table_pass_first_card" || tutorialStep === "table_pick_card")) {
       // In tutorial round 1, advance step once first pass executes
       window.setTimeout(() => {
@@ -2099,7 +2102,7 @@ export function JackpotApp() {
   };
 
   const onJackpot = () => {
-    if (!game || busy) return;
+    if (!game || busy || isMatchPaused) return;
     // Calling JACKPOT on your partner is allowed even if you hold 5 cards!
     executeJackpot();
   };
@@ -2348,6 +2351,32 @@ export function JackpotApp() {
     }
   };
 
+  const handlePauseGame = useCallback(async () => {
+    setTableMenuOpen(true);
+    const isSharedOnline = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
+    if (isSharedOnline && session && room) {
+      setMatchInterruption({
+        type: "paused",
+        playerId: session.playerId,
+        playerName: nickname || session.nickname || "Player",
+        message: `${nickname || session.nickname || "Player"} paused the game. Waiting for them to resume.`,
+        createdAt: Date.now(),
+      });
+      void requestServerGameAction("pause");
+    }
+  }, [roomCode, room, session, nickname, requestServerGameAction]);
+
+  const handleResumeGame = useCallback(async () => {
+    setTableMenuOpen(false);
+    const isSharedOnline = Boolean(roomCode && roomCode.toLowerCase() !== "practice" && room?.gameAuthoritative);
+    if (isSharedOnline && session && room) {
+      if (matchInterruption?.type === "paused") {
+        setMatchInterruption(null);
+        void requestServerGameAction("resume");
+      }
+    }
+  }, [roomCode, room, session, matchInterruption, requestServerGameAction]);
+
   const handleExitHome = useCallback(() => {
     if (isGuest && matchStats.roundsPlayed > 0 && !sessionSummaryOpen) {
       setSessionSummaryOpen(true);
@@ -2465,6 +2494,7 @@ export function JackpotApp() {
   };
 
   const onSignal = () => {
+    if (isMatchPaused) return;
     setSignalMenuOpen(false);
     if (you && you.hand.length > 4) {
       showTableToast("warning", "Pass card first", "You are holding 5 cards! Pass your extra card before flashing your signal.");
@@ -2510,7 +2540,7 @@ export function JackpotApp() {
   };
 
   const onFakeSignal = () => {
-    if (!game || busy) return;
+    if (!game || busy || isMatchPaused) return;
     setSignalMenuOpen(false);
     if (you && you.hand.length > 4) {
       showTableToast("warning", "Pass card first", "You are holding 5 cards! Pass your extra card before flashing your signal.");
@@ -2659,12 +2689,12 @@ export function JackpotApp() {
   });
 
   useEffect(() => {
-    if (screen !== "table" || !game || busy || room?.gameAuthoritative || localMatchRef.current) return;
+    if (screen !== "table" || !game || busy || room?.gameAuthoritative || localMatchRef.current || isMatchPaused) return;
     if (game.activePlayerId === viewerPlayerId) return;
     const snapshot = game;
     const timer = window.setTimeout(() => runAiTurn(snapshot), 0);
     return () => window.clearTimeout(timer);
-  }, [screen, game, busy, room?.gameAuthoritative, viewerPlayerId]);
+  }, [screen, game, busy, room?.gameAuthoritative, viewerPlayerId, isMatchPaused]);
 
   // Local Practice Bot Simulation Loop
   useEffect(() => {
@@ -2693,7 +2723,7 @@ export function JackpotApp() {
     };
 
     const interval = window.setInterval(() => {
-      if (match.state.status !== "playing" || suspectSequence !== null) return;
+      if (match.state.status !== "playing" || suspectSequence !== null || isMatchPaused) return;
       const beforePassCount = match.state.game.passCount;
       const beforeSignalsCount = match.state.game.publicSignals?.length ?? 0;
 
@@ -2738,7 +2768,7 @@ export function JackpotApp() {
     }, 120);
 
     return () => window.clearInterval(interval);
-  }, [screen, suspectSequence, viewerPlayerId, notifyCardPass, notifySignal, finishRound, showTableToast]);
+  }, [screen, suspectSequence, viewerPlayerId, notifyCardPass, notifySignal, finishRound, showTableToast, isMatchPaused]);
 
   if (!hydrated) {
     return (
@@ -4212,8 +4242,8 @@ export function JackpotApp() {
                   <button
                     type="button"
                     className="table-team-signal-pill"
-                    onClick={() => setTableMenuOpen(true)}
-                    title={`Private cue: ${selectedSignalMeta.label}. Tap to view secret cue in match menu.`}
+                    onClick={handlePauseGame}
+                    title={`Private cue: ${selectedSignalMeta.label}. Tap to pause and view secret cue in match menu.`}
                     aria-label={`Partner secret cue: ${selectedSignalMeta.label}`}
                   >
                     <span className="signal-pill-lock">🤝</span>
@@ -4254,19 +4284,15 @@ export function JackpotApp() {
                     )}
                   </div>
 
-                  {/* Table Menu Toggle Button */}
+                  {/* Table Pause Button (Replaces menu button: pauses match and opens match menu) */}
                   <button
                     type="button"
-                    className={`table-menu-toggle-btn ${tableMenuOpen ? "active" : ""}`}
-                    onClick={() => setTableMenuOpen(true)}
-                    title="Match Menu, Music & Details"
-                    aria-label="Open match details and settings"
+                    className={`table-menu-toggle-btn table-pause-toggle-btn ${tableMenuOpen || matchInterruption?.type === "paused" ? "active" : ""}`}
+                    onClick={handlePauseGame}
+                    title="Pause Match"
+                    aria-label="Pause game and open match menu"
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <line x1="3" y1="12" x2="21" y2="12" />
-                      <line x1="3" y1="6" x2="21" y2="6" />
-                      <line x1="3" y1="18" x2="21" y2="18" />
-                    </svg>
+                    <TablePauseIcon />
                   </button>
                 </div>
               </div>
@@ -4654,14 +4680,14 @@ export function JackpotApp() {
                 <div className="table-modal-card table-menu-modal">
                   <div className="table-menu-modal-header">
                     <div className="modal-title-lock">
-                      <span className="modal-crown">♛</span>
-                      <h3>Match Details &amp; Settings</h3>
+                      <span className="modal-crown">⏸</span>
+                      <h3>Match Paused — Details &amp; Settings</h3>
                     </div>
                     <button
                       type="button"
                       className="table-modal-close-icon"
-                      onClick={() => setTableMenuOpen(false)}
-                      aria-label="Close menu"
+                      onClick={handleResumeGame}
+                      aria-label="Resume match and close menu"
                     >
                       ×
                     </button>
@@ -4762,12 +4788,52 @@ export function JackpotApp() {
                     </button>
                     <button
                       type="button"
-                      className="table-modal-btn cancel-btn"
-                      onClick={() => setTableMenuOpen(false)}
+                      className="table-modal-btn resume-btn"
+                      onClick={handleResumeGame}
                     >
-                      Return to Table
+                      <TableResumeIcon />
+                      <span>Resume Match</span>
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Match Paused Modal (Shown when match is paused by a player) */}
+            {matchInterruption?.type === "paused" && !tableMenuOpen && (
+              <div className="table-modal-backdrop match-paused-backdrop" role="dialog" aria-modal="true">
+                <div className="table-modal-card match-paused-card">
+                  <div className="paused-badge">⏸️</div>
+                  <span className="modal-category-tag">MATCH PAUSED</span>
+                  <h3 className="paused-title">Waiting for {matchInterruption.playerName}...</h3>
+                  <p className="paused-desc">
+                    <strong>{matchInterruption.playerName}</strong> is offline / paused the game. Waiting for them to resume.
+                  </p>
+                  <p className="paused-subtext">The table will unfreeze automatically once they resume the match.</p>
+                  {viewerPlayerId === matchInterruption.playerId ? (
+                    <div style={{ marginTop: "16px" }}>
+                      <button
+                        type="button"
+                        className="table-modal-btn resume-btn"
+                        onClick={handleResumeGame}
+                      >
+                        <TableResumeIcon />
+                        <span>Resume Match</span>
+                      </button>
+                    </div>
+                  ) : room?.hostPlayerId === viewerPlayerId ? (
+                    <div style={{ marginTop: "16px" }}>
+                      <button
+                        type="button"
+                        className="table-modal-btn resume-host-btn"
+                        onClick={handleResumeGame}
+                        title="Room host can resume the match"
+                      >
+                        <TableResumeIcon />
+                        <span>Resume Match (Host)</span>
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             )}
@@ -5851,6 +5917,23 @@ function ResultExitIcon() {
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
       <polyline points="16 17 21 12 16 7" />
       <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  );
+}
+
+function TablePauseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+      <rect x="6" y="4" width="4" height="16" rx="1.5" />
+      <rect x="14" y="4" width="4" height="16" rx="1.5" />
+    </svg>
+  );
+}
+
+function TableResumeIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+      <polygon points="6,4 20,12 6,20" />
     </svg>
   );
 }

@@ -50,7 +50,7 @@ export type LocalRoom = {
   result: RoundResult | null;
   suspectAttemptsRemaining?: Partial<Record<"Alpha" | "Bravo", number>>;
   matchInterruption?: {
-    type: "deliberate_exit" | "disconnected" | "aborted";
+    type: "deliberate_exit" | "disconnected" | "aborted" | "paused";
     playerId: string;
     playerName: string;
     message: string;

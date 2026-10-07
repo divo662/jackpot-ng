@@ -35,7 +35,7 @@ export type SharedRoom = {
   result?: RoundResult | null;
   gameAuthoritative?: boolean;
   matchInterruption?: {
-    type: "deliberate_exit" | "disconnected" | "aborted";
+    type: "deliberate_exit" | "disconnected" | "aborted" | "paused";
     playerId: string;
     playerName: string;
     message: string;
@@ -290,7 +290,7 @@ export async function getSharedRoom(code: string, forceFresh = false): Promise<S
     });
 
     if (disconnectedPlayer) {
-      if (!currentRoom.matchInterruption) {
+      if (!currentRoom.matchInterruption || currentRoom.matchInterruption.type === "paused") {
         const updated: SharedRoom = {
           ...currentRoom,
           matchInterruption: {
@@ -932,6 +932,7 @@ export async function performSharedGameAction(code: string, action: SharedGameAc
     const room = await getSharedRoom(code);
     if (!room || room.status !== "table" || !room.gameSnapshot) return { error: "The game table is not active." };
     if (!room.players.some((player) => player.id === action.playerId)) return { error: "Your player session is not in this room." };
+    if (action.type !== "reaction" && room.matchInterruption) return { error: "The match is currently paused." };
     let game = room.gameSnapshot;
     let scores = room.scores ?? emptyScores();
     let result = room.result ?? null;
@@ -1124,6 +1125,57 @@ export async function rematchSharedMatch(code: string, requesterId: string): Pro
 
 export async function restartSharedMatch(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
   return startNextSharedRound(code, requesterId);
+}
+
+export async function pauseSharedMatch(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const room = await getSharedRoom(code, true);
+    if (!room) return { error: "This room is no longer available." };
+    const player = room.players.find((p) => p.id === requesterId);
+    if (!player) return { error: "Your player session is not in this room." };
+    if (room.status !== "table") return { error: "The match cannot be paused right now." };
+    if (room.matchInterruption) {
+      return { room };
+    }
+    const now = Date.now();
+    const next: SharedRoom = {
+      ...room,
+      matchInterruption: {
+        type: "paused",
+        playerId: player.id,
+        playerName: player.nickname,
+        message: `${player.nickname} paused the game. Waiting for them to resume.`,
+        createdAt: now,
+      },
+      updatedAt: nextUpdatedAt(room),
+    };
+    if (await saveRoom(next, room.updatedAt)) return { room: next };
+    await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+  }
+  return { error: "Room is busy updating. Please try again." };
+}
+
+export async function resumeSharedMatch(code: string, requesterId: string): Promise<{ room?: SharedRoom; error?: string }> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const room = await getSharedRoom(code, true);
+    if (!room) return { error: "This room is no longer available." };
+    const player = room.players.find((p) => p.id === requesterId);
+    if (!player) return { error: "Your player session is not in this room." };
+    if (!room.matchInterruption || room.matchInterruption.type !== "paused") {
+      return { room };
+    }
+    if (room.matchInterruption.playerId !== requesterId && room.hostPlayerId !== requesterId) {
+      return { error: `Only ${room.matchInterruption.playerName} or the room host can resume the match.` };
+    }
+    const next: SharedRoom = {
+      ...room,
+      matchInterruption: null,
+      updatedAt: nextUpdatedAt(room),
+    };
+    if (await saveRoom(next, room.updatedAt)) return { room: next };
+    await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+  }
+  return { error: "Room is busy updating. Please try again." };
 }
 
 function hiddenCard(ownerId: string, index: number): JackpotCard {
